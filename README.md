@@ -201,6 +201,7 @@ npm run electron:build
 ## 🙏 致谢与开源协议
 
 - **原始项目**：特别感谢原作者 [@HanversionOvO](https://github.com/HanversionOvO) 开源的原版 [BiliMusic](https://github.com/HanversionOvO/BiliMusic)，提供了优异的视觉设计与跨平台基础架构。
+- **社区友链**：[LINUX DO](https://linux.do/) —— 新一代极客与开源探索技术社区，真诚、友善、团结、专业。
 - **开源协议**：本项目沿用 [MIT License](./LICENSE) 开源协议。本软件仅供学习交流使用，音频版权归原视频创作者及哔哩哔哩平台所有。
 
 ## 本 fork 的检查更新与发布
