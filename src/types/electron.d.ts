@@ -1,11 +1,14 @@
 interface BiliApi {
+  request: (path: string) => Promise<any>
+  localAudio: (filename: string, customDir?: string, size?: number) => Promise<string | null>
+  onDownloadProgress: (callback: (data: { filename: string; received: number; total: number; percent: number | null }) => void) => () => void
   search: (keyword: string, page?: number, pageSize?: number) => Promise<any>
   videoDetail: (bvid: string) => Promise<any>
   playUrl: (bvid: string, cid: number) => Promise<any>
   nav: () => Promise<any>
   popular: (ps?: number, pn?: number) => Promise<any>
   recommend: (ps?: number) => Promise<any>
-  musicRanking: () => Promise<any>
+  musicRanking: (options?: { source?: 'hot' | 'original' | 'latest'; page?: number; pageSize?: number }) => Promise<any>
   favorites: (mid: number) => Promise<any>
   extractAudio: (bvid: string) => Promise<{
     bvid: string
@@ -20,7 +23,10 @@ interface BiliApi {
     audioMimeType: string
     bandwidth: number
   }>
-  downloadAudio: (audioUrl: string, filename: string) => Promise<{
+  getDownloadDir: (customDir?: string) => Promise<string>
+  deleteDownloadedFile: (filename: string, customDir?: string) => Promise<{ success: boolean; error?: string }>
+  checkDownloadedFiles: (filenames: string[], customDir?: string) => Promise<Record<string, { exists: boolean; size?: number }>>
+  downloadAudio: (audioUrl: string, filename: string, customDir?: string) => Promise<{
     filePath: string
     size: number
   }>
@@ -34,11 +40,12 @@ interface BiliApi {
     message: string
     url: string
   }>
-  getCookies: () => Promise<{
+  getLoginStatus: () => Promise<{
     isLoggedIn: boolean
-    sessdata: string
-    biliJct: string
-    dedeUserId: string
+    isLogin: boolean
+    uid: string
+    uname: string
+    face: string
   }>
   logout: () => Promise<{ success: boolean }>
 }
@@ -66,10 +73,43 @@ interface LyricsApi {
   get: (id: string | number, format?: 'lrc' | 'qrc' | 'ksc') => Promise<OiapiLyricData | null>
 }
 
+interface PlaylistApi {
+  netease: (id: string) => Promise<any>
+  qq: (id: string) => Promise<any>
+}
+
 interface PersistentStorageApi {
   getItem: (key: string) => string | null
   setItem: (key: string, value: string) => void
   removeItem: (key: string) => void
+}
+
+export interface DesktopLyricsStyle {
+  fontSize: number
+  bold: boolean
+  color: string
+  outline: boolean
+  outlineWidth: number
+  outlineColor: string
+  showBg: boolean
+  bgColor: string
+  bgRadius: number
+  shadow: boolean
+}
+
+export interface DesktopLyricsStatePatch {
+  visible?: boolean
+  line?: string
+  nextLine?: string
+  isPlaying?: boolean
+  hasTrack?: boolean
+  locked?: boolean
+  style?: Partial<DesktopLyricsStyle>
+}
+
+interface DesktopLyricsApi {
+  setState: (patch: DesktopLyricsStatePatch) => void
+  toggleLock: () => void
 }
 
 export interface TrayPlayerState {
@@ -130,6 +170,8 @@ declare global {
       updateTrayPlayerState?: (state: TrayPlayerState) => void
       onTrayPlayerCommand?: (callback: (command: TrayPlayerCommand) => void) => () => void
       openExternal: (url: string) => Promise<void>
+      openPath: (path: string) => Promise<string>
+      selectFolder?: (defaultPath?: string) => Promise<string | null>
       getAppVersion?: () => Promise<string>
       checkForUpdate?: () => Promise<void>
       quitAndInstall?: () => void
@@ -144,8 +186,10 @@ declare global {
       clearWebdav?: () => Promise<{ ok: boolean }>
       platform: string
       persistentStorage?: PersistentStorageApi
+      desktopLyrics?: DesktopLyricsApi
       biliApi: BiliApi
       lyricsApi: LyricsApi
+      playlistApi: PlaylistApi
     }
   }
 }

@@ -1,0 +1,5 @@
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+3 !== 4
+
+    at run (E:\document\project\BiliMusic\scripts\smoke-electron.cjs:230:12)

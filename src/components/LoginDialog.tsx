@@ -13,15 +13,17 @@ interface LoginDialogProps {
 export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
   const [status, setStatus] = useState<QrStatus>('loading')
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
-  const [qrcodeKey, setQrcodeKey] = useState<string>('')
   const [countdown, setCountdown] = useState(180)
   const [errorMsg, setErrorMsg] = useState('')
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const callbacks = useRef({ onClose, onSuccess })
+  callbacks.current = { onClose, onSuccess }
+  const generation = useRef(0)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current)
+      clearTimeout(pollTimerRef.current)
       pollTimerRef.current = null
     }
     if (countdownRef.current) {
@@ -30,52 +32,46 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
     }
   }, [])
 
-  // 轮询扫码状态
-  const startPolling = useCallback((key: string) => {
-    stopPolling()
-
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const result = await pollQrCode(key)
-
-        if (result.status === 0 || result.code === 0) {
-          setStatus('success')
-          stopPolling()
-          setTimeout(() => onSuccess(), 800)
-        } else if (result.status === 86090) {
-          setStatus('scanned')
-        } else if (result.code === 86038 || result.status === 86038) {
-          setStatus('expired')
-          stopPolling()
-        }
-      } catch {
-        // 网络波动继续轮询，不中断流程
-      }
-    }, 2000)
-  }, [onSuccess, stopPolling])
-
-  // 生成二维码
   const generate = useCallback(async () => {
+    const attempt = ++generation.current
+    stopPolling()
     setStatus('loading')
     setErrorMsg('')
     setCountdown(180)
-
     try {
       const data = await generateQrCode()
       const dataUrl = await QRCode.toDataURL(data.url, {
-        width: 200,
-        margin: 2,
-        color: { dark: '#18191C', light: '#FFFFFF' },
+        width: 200, margin: 2, color: { dark: '#18191C', light: '#FFFFFF' },
       })
+      if (attempt !== generation.current) return
       setQrDataUrl(dataUrl)
-      setQrcodeKey(data.qrcodeKey)
       setStatus('waiting')
-      startPolling(data.qrcodeKey)
+      const poll = async () => {
+        if (attempt !== generation.current) return
+        try {
+          const result = await pollQrCode(data.qrcodeKey)
+          if (attempt !== generation.current) return
+          const code = result.status ?? result.code
+          if (code === 0) {
+            ++generation.current
+            stopPolling()
+            setStatus('success')
+            callbacks.current.onSuccess()
+            callbacks.current.onClose()
+            return
+          }
+          if (code === 86038) { ++generation.current; setStatus('expired'); stopPolling(); return }
+          if (code === 86090) setStatus('scanned')
+        } catch { /* retry serially without overlapping requests */ }
+        if (attempt === generation.current) pollTimerRef.current = setTimeout(poll, 2000)
+      }
+      pollTimerRef.current = setTimeout(poll, 2000)
     } catch (e: any) {
+      if (attempt !== generation.current) return
       setStatus('error')
       setErrorMsg(e.message || '生成二维码失败，请检查网络后重试')
     }
-  }, [startPolling])
+  }, [stopPolling])
 
   // 倒计时
   useEffect(() => {
@@ -84,6 +80,7 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
     countdownRef.current = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) {
+          ++generation.current
           setStatus('expired')
           stopPolling()
           return 0
@@ -100,7 +97,7 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
   // 初始化生成二维码
   useEffect(() => {
     generate()
-    return () => stopPolling()
+    return () => { ++generation.current; stopPolling() }
   }, [generate, stopPolling])
 
   // ESC 关闭

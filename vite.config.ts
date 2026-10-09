@@ -16,6 +16,7 @@ const electronExternals = [
 
 export default defineConfig({
   plugins: [
+    { name: 'development-csp', transformIndexHtml(html, context) { return context.server ? html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") : html } },
     react(),
     tailwindcss(),
     electron([
@@ -37,6 +38,7 @@ export default defineConfig({
     },
   },
   base: './',
+  build: { rollupOptions: { output: { manualChunks: { 'react-vendor': ['react', 'react-dom', 'react-router-dom'], motion: ['framer-motion'] } } } },
   server: {
     port: 5173,
   },

@@ -1,5 +1,7 @@
+import { parseDuration } from '@/utils/duration'
+import TrackSkeleton from '@/components/TrackSkeleton'
 import { useEffect, useState, useCallback } from 'react'
-import { Flame, Loader2, Play, RefreshCw, Sparkles } from 'lucide-react'
+import { Flame, Play, RefreshCw, Sparkles } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
 import { getMusicCenterRank, getNewSongs, type MusicSong } from '@/services/api'
 import type { Track } from '@/types'
@@ -21,7 +23,7 @@ function songToTrack(s: MusicSong): Track {
     title: s.title,
     artist: s.artist,
     coverUrl: s.coverUrl,
-    duration: 0,
+    duration: parseDuration(s.duration),
     videoUrl: `https://www.bilibili.com/video/${s.bvid}`,
     bvid: s.bvid,
     aid: s.aid,
@@ -64,13 +66,13 @@ export default function Recommend() {
     setLoading(false)
   }
 
-  const handlePlay = useCallback((song: MusicSong) => {
-    player.playNow(songToTrack(song))
+  const handlePlay = useCallback((song: MusicSong, list: MusicSong[]) => {
+    player.playFromList(songToTrack(song), list.map(songToTrack))
   }, [player])
 
   const handlePlayAll = useCallback((songs: MusicSong[]) => {
     if (songs.length === 0) return
-    player.playAll(songs.slice(0, 30).map(songToTrack))
+    player.playAll(songs.map(songToTrack))
   }, [player])
 
   const heroSong = rankSongs[0] || newSongs[0]
@@ -94,7 +96,7 @@ export default function Recommend() {
       />
 
       {loading ? (
-        <div className="am-loading"><Loader2 size={30} className="spin" /></div>
+        <TrackSkeleton />
       ) : error ? (
         <EmptyLibrary icon={<RefreshCw size={38} />} title="加载失败" subtitle={error} />
       ) : (
@@ -109,7 +111,7 @@ export default function Recommend() {
                     track={{ ...track, playCount: 0 }}
                     index={index + 1}
                     isCurrent={player.currentTrack?.id === song.bvid}
-                    onPlay={() => handlePlay(song)}
+                    onPlay={() => handlePlay(song, newSongs)}
                   />
                 )
               })}
@@ -127,7 +129,7 @@ export default function Recommend() {
                     index={index + 1}
                     isCurrent={player.currentTrack?.id === song.bvid}
                     isPlaying={player.isPlaying}
-                    onPlay={() => handlePlay(song)}
+                    onPlay={() => handlePlay(song, rankSongs)}
                   />
                 )
               })}

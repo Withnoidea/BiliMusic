@@ -1,0 +1,1185 @@
+import { ipcMain as l, app as g, net as w, session as _, shell as Se, safeStorage as Q, protocol as Re, screen as J, BrowserWindow as se, Tray as Oe, nativeImage as ze } from "electron";
+import L from "fs";
+import x from "path";
+import { fileURLToPath as He, pathToFileURL as Ne } from "url";
+import fe from "fs/promises";
+import T from "node:path";
+import E from "node:fs";
+import ge from "node:fs/promises";
+import Qe from "node:crypto";
+const q = "https://api.bilibili.com", H = "https://passport.bilibili.com", $e = "https://www.bilibili.com";
+function Je() {
+  l.handle("bili:search", async (t, e, r = 1, n = 20) => $(`/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(e)}&page=${r}&pagesize=${n}`)), l.handle("bili:videoDetail", async (t, e) => $(`/x/web-interface/view?bvid=${e}`)), l.handle("bili:playUrl", async (t, e, r) => $(`/x/player/playurl?bvid=${e}&cid=${r}&qn=0&fnver=0&fnval=16&fourk=1`)), l.handle("bili:nav", async () => $("/x/web-interface/nav")), l.handle("bili:popular", async (t, e = 10, r = 1) => $(`/x/web-interface/popular?ps=${e}&pn=${r}`)), l.handle("bili:recommend", async (t, e = 10) => $(`/x/web-interface/index/top/rcmd?ps=${e}`)), l.handle("bili:musicRanking", async () => $("/x/web-interface/ranking/region?rid=3&day=3")), l.handle("bili:favorites", async (t, e) => $(`/x/v3/fav/folder/created/list-all?up_mid=${e}`)), l.handle("bili:downloadAudio", async (t, e, r) => {
+    const n = x.join(g.getPath("userData"), "downloads");
+    await fe.mkdir(n, { recursive: !0 });
+    const o = x.join(n, r), i = await w.fetch(e, {
+      headers: { Referer: $e }
+    });
+    if (!i.ok) throw new Error(`Download failed: ${i.status}`);
+    const c = Buffer.from(await i.arrayBuffer());
+    return await fe.writeFile(o, c), { filePath: o, size: c.length };
+  }), l.handle("bili:extractAudio", async (t, e) => {
+    var c, u;
+    const r = await $(`/x/web-interface/view?bvid=${e}`), o = ((c = (await $(`/x/player/playurl?bvid=${e}&cid=${r.cid}&qn=0&fnver=0&fnval=16&fourk=1`)).dash) == null ? void 0 : c.audio) || [];
+    if (!o.length) throw new Error("No audio stream available");
+    const i = [...o].sort((f, y) => y.bandwidth - f.bandwidth)[0];
+    return {
+      bvid: r.bvid,
+      aid: r.aid,
+      cid: r.cid,
+      title: r.title,
+      artist: (u = r.owner) == null ? void 0 : u.name,
+      coverUrl: r.pic,
+      duration: r.duration,
+      audioUrl: i.baseUrl,
+      audioQuality: i.quality,
+      audioMimeType: i.mimeType,
+      bandwidth: i.bandwidth
+    };
+  }), l.handle("bili:qrGenerate", async () => {
+    const t = `${H}/x/passport-login/web/qrcode/generate`, r = await (await w.fetch(t, {
+      headers: { Referer: `${H}/login` }
+    })).json();
+    if (r.code !== 0)
+      throw { code: r.code, message: r.message };
+    return {
+      url: r.data.url,
+      qrcodeKey: r.data.qrcode_key
+    };
+  }), l.handle("bili:qrPoll", async (t, e) => {
+    var y, P, U, A, m, B;
+    const r = `${H}/x/passport-login/web/qrcode/poll?qrcode_key=${e}`, n = await w.fetch(r, {
+      headers: { Referer: `${H}/login` },
+      redirect: "manual"
+    }), o = n.status, i = ((P = (y = n.headers).getSetCookie) == null ? void 0 : P.call(y)) || [];
+    if ((o === 302 || o === 301) && i.length > 0) {
+      for (const S of i)
+        try {
+          await _.defaultSession.cookies.set({
+            url: q,
+            name: Ye(S),
+            value: Ge(S),
+            domain: ".bilibili.com",
+            path: "/",
+            secure: !0,
+            httpOnly: !0
+          });
+        } catch {
+        }
+      return {
+        code: 0,
+        status: 0,
+        message: "登录成功",
+        url: n.headers.get("Location") || ""
+      };
+    }
+    const u = await n.text();
+    let f;
+    try {
+      f = JSON.parse(u);
+    } catch {
+      return { code: -1, status: -1, message: "unknown", url: "" };
+    }
+    return {
+      code: ((U = f.data) == null ? void 0 : U.code) ?? f.code,
+      status: ((A = f.data) == null ? void 0 : A.code) ?? f.code,
+      message: ((m = f.data) == null ? void 0 : m.message) || f.message,
+      url: ((B = f.data) == null ? void 0 : B.url) || ""
+    };
+  }), l.handle("bili:getCookies", async () => {
+    const t = await _.defaultSession.cookies.get({ domain: ".bilibili.com" }), e = t.find((o) => o.name === "SESSDATA"), r = t.find((o) => o.name === "bili_jct"), n = t.find((o) => o.name === "DedeUserID");
+    return {
+      isLoggedIn: !!(e && r && n),
+      sessdata: (e == null ? void 0 : e.value) || "",
+      biliJct: (r == null ? void 0 : r.value) || "",
+      dedeUserId: (n == null ? void 0 : n.value) || ""
+    };
+  }), l.handle("bili:logout", async () => (await _.defaultSession.cookies.remove(q, "SESSDATA"), await _.defaultSession.cookies.remove(q, "bili_jct"), await _.defaultSession.cookies.remove(q, "DedeUserID"), await _.defaultSession.cookies.remove(q, "DedeUserID__ckMd5"), { success: !0 }));
+}
+async function $(t) {
+  const e = `${q}${t}`, n = (await _.defaultSession.cookies.get({ url: q })).map((u) => `${u.name}=${u.value}`).join("; "), o = {
+    Referer: $e,
+    Origin: "https://www.bilibili.com"
+  };
+  n && (o.Cookie = n);
+  const c = await (await w.fetch(e, { headers: o })).json();
+  if (c.code !== 0)
+    throw { code: c.code, message: c.message, path: t };
+  return c.data;
+}
+function Ye(t) {
+  return t.split(";")[0].split("=")[0].trim();
+}
+function Ge(t) {
+  return t.split(";")[0].split("=").slice(1).join("=").trim();
+}
+const he = "https://www.oiapi.net/api/QQMusicLyric";
+function ye(t) {
+  return !!t && typeof t == "object";
+}
+async function be(t) {
+  const e = new AbortController(), r = setTimeout(() => e.abort(), 9e3);
+  try {
+    const n = await w.fetch(t, { signal: e.signal });
+    return n.ok ? await n.json() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(r);
+  }
+}
+function Ke() {
+  l.handle("lyrics:search", async (t, e, r = 1, n = 10) => {
+    const o = String(e || "").trim();
+    if (!o) return [];
+    const i = new URL(he);
+    i.searchParams.set("keyword", o), i.searchParams.set("page", String(r)), i.searchParams.set("limit", String(n)), i.searchParams.set("type", "json");
+    const c = await be(i.toString()), u = c == null ? void 0 : c.data;
+    return Array.isArray(u) ? u.filter((f) => ye(f) && typeof f.name == "string") : [];
+  }), l.handle("lyrics:get", async (t, e, r = "lrc") => {
+    const n = String(e || "").trim();
+    if (!n) return null;
+    const o = new URL(he);
+    o.searchParams.set("id", n), o.searchParams.set("format", r), o.searchParams.set("type", "json");
+    const i = await be(o.toString());
+    return !i || i.code !== 1 ? null : typeof i.data == "string" ? { content: i.data } : ye(i.data) ? i.data : typeof i.message == "string" && i.message.includes("[") ? { content: i.message } : null;
+  });
+}
+let Ee = () => null;
+function Xe(t) {
+  Ee = t;
+}
+function v(t) {
+  var e;
+  (e = Ee()) == null || e.webContents.send("updater:event", t);
+}
+function V(...t) {
+  console.log("[BiliMusic-OTA]", ...t);
+}
+const Ze = "HanversionOvO/BiliMusic", _e = `https://github.com/${Ze}/releases/latest/download`, We = `${_e}/ota.json`;
+let a = {
+  activeVersion: null,
+  activeFile: null,
+  verified: !1,
+  pendingVersion: null,
+  pendingFile: null,
+  failedVersions: []
+}, b = null, Te = "", Ve = () => {
+}, X = !1;
+function Ie() {
+  return T.join(b, "state.json");
+}
+function et() {
+  if (b)
+    try {
+      a = { ...a, ...JSON.parse(E.readFileSync(Ie(), "utf8")) };
+    } catch {
+    }
+}
+function M() {
+  if (b)
+    try {
+      E.writeFileSync(Ie(), JSON.stringify(a, null, 2));
+    } catch {
+    }
+}
+function te(t, e) {
+  const r = t.split("-")[0].split(".").map((o) => Number(o) || 0), n = e.split("-")[0].split(".").map((o) => Number(o) || 0);
+  for (let o = 0; o < 3; o++) {
+    if ((r[o] || 0) > (n[o] || 0)) return !0;
+    if ((r[o] || 0) < (n[o] || 0)) return !1;
+  }
+  return !1;
+}
+function Pe() {
+  if (b && a.activeVersion && a.activeFile) {
+    const t = T.join(b, a.activeFile);
+    if (E.existsSync(t)) return t;
+  }
+  return Te;
+}
+function tt() {
+  return a.activeVersion || g.getVersion();
+}
+function rt(t, e) {
+  return !(!b || a.failedVersions.includes(t.rendererVersion) || !te(t.rendererVersion, tt()) || te(t.minShellVersion || "0.0.0", e));
+}
+async function nt() {
+  const t = await w.fetch(We, { cache: "no-store" });
+  if (!t.ok) throw new Error(`获取更新信息失败 HTTP ${t.status}`);
+  const e = await t.json();
+  return !(e != null && e.rendererVersion) || !(e != null && e.file) || !(e != null && e.sha512) ? null : e;
+}
+async function st(t, e) {
+  var u;
+  const r = await w.fetch(t);
+  if (!r.ok) throw new Error(`下载失败 HTTP ${r.status}`);
+  const n = Number(r.headers.get("content-length") || 0), o = (u = r.body) == null ? void 0 : u.getReader();
+  if (!o) return Buffer.from(await r.arrayBuffer());
+  const i = [];
+  let c = 0;
+  for (; ; ) {
+    const { done: f, value: y } = await o.read();
+    if (f) break;
+    y && (i.push(y), c += y.length, n > 0 && e(Math.round(c / n * 100)));
+  }
+  return Buffer.concat(i);
+}
+async function ot(t) {
+  if (!(!b || X)) {
+    X = !0;
+    try {
+      v({ type: "renderer-available", version: t.rendererVersion });
+      const e = await st(
+        `${_e}/${t.file}`,
+        (i) => v({ type: "renderer-progress", percent: i })
+      );
+      if (Qe.createHash("sha512").update(e).digest("base64") !== t.sha512) throw new Error("校验失败：渲染包指纹不匹配");
+      V("renderer downloaded & sha512 ok:", t.file, `${(e.length / 1048576).toFixed(2)}MB`);
+      const n = T.join(b, `${t.file}.tmp`), o = T.join(b, t.file);
+      await ge.writeFile(n, e), await ge.rename(n, o), a.pendingVersion = t.rendererVersion, a.pendingFile = t.file, M(), v({ type: "renderer-ready-to-apply", version: t.rendererVersion });
+    } finally {
+      X = !1;
+    }
+  }
+}
+function it() {
+  if (b) {
+    if (et(), a.activeVersion && !a.verified) {
+      if (V("rollback unverified renderer (asar serving may have failed):", a.activeVersion), a.failedVersions.includes(a.activeVersion) || (a.failedVersions = [...a.failedVersions, a.activeVersion]), a.activeFile)
+        try {
+          E.rmSync(T.join(b, a.activeFile), { force: !0 });
+        } catch {
+        }
+      a.activeVersion = null, a.activeFile = null, a.verified = !1, M();
+    }
+    a.pendingVersion && a.pendingFile && (!a.failedVersions.includes(a.pendingVersion) && E.existsSync(T.join(b, a.pendingFile)) && (a.activeVersion = a.pendingVersion, a.activeFile = a.pendingFile, a.verified = !1), a.pendingVersion = null, a.pendingFile = null, M());
+  }
+}
+function at() {
+  b && a.activeVersion && !a.verified && (a.verified = !0, M());
+}
+function lt() {
+  !b || !a.pendingVersion || !a.pendingFile || E.existsSync(T.join(b, a.pendingFile)) && (a.activeVersion = a.pendingVersion, a.activeFile = a.pendingFile, a.verified = !1, a.pendingVersion = null, a.pendingFile = null, M(), Ve());
+}
+function ct(t) {
+  Te = t.bundledRendererRoot, Ve = t.reload;
+  try {
+    const e = T.join(g.getPath("userData"), "ota");
+    E.mkdirSync(e, { recursive: !0 }), b = e;
+  } catch (e) {
+    b = null, V("OTA disabled: userData/fs unavailable —", e instanceof Error ? e.message : String(e));
+  }
+  it(), V("init done. otaRoot=", b ?? "DISABLED", "| activeRenderer=", a.activeVersion ?? "bundled"), V("activeRendererRoot=", Pe()), l.on("updater:renderer-ready", () => at()), l.on("updater:apply-now", () => lt());
+}
+const me = "https://github.com/HanversionOvO/BiliMusic/releases/latest", dt = 360 * 60 * 1e3, ut = 10 * 1e3;
+let Z = !1;
+function re() {
+  return !(process.platform === "darwin" || process.platform === "openharmony");
+}
+let W = null;
+function Ue() {
+  return W || (W = import("electron-updater").then((t) => {
+    const e = (t.default ?? t).autoUpdater;
+    return e.autoDownload = !0, e.autoInstallOnAppQuit = !0, e.on(
+      "update-available",
+      (r) => v({
+        type: "available",
+        version: r.version,
+        notes: typeof r.releaseNotes == "string" ? r.releaseNotes : void 0
+      })
+    ), e.on("download-progress", (r) => v({ type: "progress", percent: Math.round(r.percent) })), e.on("update-downloaded", (r) => v({ type: "downloaded", version: r.version })), e.on(
+      "error",
+      (r) => v({ type: "error", message: r instanceof Error ? r.message : String(r) })
+    ), e;
+  })), W;
+}
+async function ee(t) {
+  if (!Z) {
+    Z = !0;
+    try {
+      if (t && v({ type: "checking" }), process.env.VITE_DEV_SERVER_URL) {
+        t && v({ type: "up-to-date", version: g.getVersion() });
+        return;
+      }
+      const e = await nt();
+      if (V("check: manifest=", e ? `renderer=${e.rendererVersion} shell=${e.shellVersion} minShell=${e.minShellVersion}` : "none", "| appV=", g.getVersion()), !e) {
+        t && v({ type: "up-to-date", version: g.getVersion() });
+        return;
+      }
+      const r = g.getVersion();
+      if (rt(e, r)) {
+        V("check: -> renderer patch", e.rendererVersion), await ot(e);
+        return;
+      }
+      if (te(e.shellVersion, r)) {
+        V("check: -> shell update, canAutoUpdate=", re()), re() && g.isPackaged ? await (await Ue()).checkForUpdates() : t && (Se.openExternal(me), v({ type: "manual", url: me }));
+        return;
+      }
+      t && v({ type: "up-to-date", version: r });
+    } catch (e) {
+      v({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      Z = !1;
+    }
+  }
+}
+function pt(t) {
+  Xe(t.window), ct({ bundledRendererRoot: t.bundledRendererRoot, reload: t.reload }), l.handle("updater:check", () => {
+    ee(!0);
+  }), l.on("updater:quit-and-install", () => {
+    re() && Ue().then((e) => e.quitAndInstall());
+  }), l.handle("app:get-version", () => g.getVersion()), process.env.VITE_DEV_SERVER_URL || (setTimeout(() => {
+    ee(!1);
+  }, ut), setInterval(() => {
+    ee(!1);
+  }, dt));
+}
+const oe = "bilimusic";
+let p = null;
+function ie() {
+  return T.join(g.getPath("userData"), "webdav.json");
+}
+function ft() {
+  var t, e;
+  try {
+    const r = JSON.parse(E.readFileSync(ie(), "utf8"));
+    let n = "";
+    (t = r.password) != null && t.startsWith("enc:") && Q.isEncryptionAvailable() ? n = Q.decryptString(Buffer.from(r.password.slice(4), "base64")) : (e = r.password) != null && e.startsWith("plain:") && (n = Buffer.from(r.password.slice(6), "base64").toString("utf8")), p = { url: r.url, username: r.username, password: n };
+  } catch {
+    p = null;
+  }
+}
+function gt(t) {
+  let e;
+  try {
+    Q.isEncryptionAvailable() ? e = `enc:${Q.encryptString(t.password).toString("base64")}` : e = `plain:${Buffer.from(t.password, "utf8").toString("base64")}`;
+  } catch {
+    e = `plain:${Buffer.from(t.password, "utf8").toString("base64")}`;
+  }
+  E.writeFileSync(ie(), JSON.stringify({ url: t.url, username: t.username, password: e }, null, 2));
+}
+function ht() {
+  return `Basic ${Buffer.from(`${p.username}:${p.password}`).toString("base64")}`;
+}
+function ae(t, ...e) {
+  return [t.replace(/\/+$/, ""), ...e.map((n) => n.replace(/^\/+|\/+$/g, ""))].join("/");
+}
+function K(t, e) {
+  return w.fetch(t, {
+    method: e.method,
+    headers: { Authorization: ht(), ...e.headers || {} },
+    body: e.body
+  });
+}
+async function yt() {
+  const t = `${ae(p.url, oe)}/`;
+  try {
+    await K(t, { method: "MKCOL" });
+  } catch {
+  }
+}
+async function bt() {
+  if (!(p != null && p.url) || !(p != null && p.username)) return { ok: !1, message: "未配置" };
+  try {
+    return (await K(p.url, { method: "GET" })).status === 401 ? { ok: !1, message: "认证失败：账号或密码错误" } : { ok: !0, message: "连接成功" };
+  } catch (t) {
+    return { ok: !1, message: t instanceof Error ? t.message : String(t) };
+  }
+}
+async function mt(t) {
+  if (!p) return { ok: !1, status: 0, etag: null, content: null, message: "未配置" };
+  try {
+    const e = await K(ae(p.url, oe, t), { method: "GET" });
+    return e.status === 404 ? { ok: !0, status: 404, etag: null, content: null } : e.status === 401 ? { ok: !1, status: 401, etag: null, content: null, message: "认证失败" } : e.status >= 200 && e.status < 300 ? { ok: !0, status: e.status, etag: e.headers.get("etag"), content: await e.text() } : { ok: !1, status: e.status, etag: null, content: null, message: `HTTP ${e.status}` };
+  } catch (e) {
+    return { ok: !1, status: 0, etag: null, content: null, message: e instanceof Error ? e.message : String(e) };
+  }
+}
+async function wt(t, e, r) {
+  if (!p) return { ok: !1, status: 0, etag: null, content: null, message: "未配置" };
+  try {
+    await yt();
+    const n = { "Content-Type": "application/json; charset=utf-8" };
+    r && (n["If-Match"] = r);
+    const o = await K(ae(p.url, oe, t), { method: "PUT", headers: n, body: e });
+    return o.status === 412 ? { ok: !1, status: 412, etag: null, content: null, message: "远端已变更，需重新合并" } : o.status >= 200 && o.status < 300 ? { ok: !0, status: o.status, etag: o.headers.get("etag"), content: null } : { ok: !1, status: o.status, etag: null, content: null, message: `HTTP ${o.status}` };
+  } catch (n) {
+    return { ok: !1, status: 0, etag: null, content: null, message: n instanceof Error ? n.message : String(n) };
+  }
+}
+function vt() {
+  ft(), l.handle("webdav:configure", (t, e) => {
+    const r = String(e.password || "") || (p == null ? void 0 : p.password) || "";
+    return p = { url: String(e.url || "").trim(), username: String(e.username || ""), password: r }, gt(p), { ok: !0 };
+  }), l.handle(
+    "webdav:get-config",
+    () => p != null && p.url ? { url: p.url, username: p.username, configured: !0 } : { url: "", username: "", configured: !1 }
+  ), l.handle("webdav:test", () => bt()), l.handle("webdav:get", (t, e) => mt(e)), l.handle("webdav:put", (t, e, r, n) => wt(e, r, n || void 0)), l.handle("webdav:clear", () => {
+    p = null;
+    try {
+      E.rmSync(ie(), { force: !0 });
+    } catch {
+    }
+    return { ok: !0 };
+  });
+}
+const we = { headers: { Referer: "https://music.163.com" } }, xt = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Referer: "https://y.qq.com/",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9"
+}, ve = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Referer: "https://y.qq.com/",
+  "Accept-Language": "zh-CN,zh;q=0.9"
+};
+function xe(t) {
+  try {
+    return JSON.parse(t);
+  } catch {
+    const e = t.match(/\{[\s\S]*\}/);
+    if (e) return JSON.parse(e[0]);
+    throw new Error("QQ音乐歌单解析失败：无法解析响应");
+  }
+}
+function qe(t) {
+  const e = t.match(/\/(?:playlist|disstid)\/(\d{4,})/) || t.match(/(?:disstid|dissid|playlist_id)[=&](\d{4,})/) || t.match(/[?&]id=(\d{4,})/);
+  return e ? e[1] : null;
+}
+function kt(t) {
+  var r, n, o;
+  if (!t) return null;
+  const e = ((r = t.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^>]*url=([^"'>]+)/i)) == null ? void 0 : r[1]) || ((n = t.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)/)) == null ? void 0 : n[1]) || ((o = t.match(/https?:\/\/[^'"<\s]*(?:playlist|disstid)[^'"<\s]*/)) == null ? void 0 : o[0]);
+  return e ? qe(e) : null;
+}
+async function St(t) {
+  for (const e of ["c.y.qq.com", "c6.y.qq.com", "i.y.qq.com", "m.y.qq.com"])
+    try {
+      const r = await w.fetch(`https://${e}/base/fcgi-bin/u?__=${encodeURIComponent(t)}`, {
+        headers: xt,
+        redirect: "follow"
+      }), n = qe(r.url);
+      if (n) return n;
+      const o = kt(await r.text());
+      if (o) return o;
+    } catch {
+    }
+  throw new Error(
+    "无法解析QQ音乐分享链接：链接可能已失效或需要登录。请改用歌单页面链接（y.qq.com/n/ryqq/playlist/歌单ID）或直接粘贴歌单ID"
+  );
+}
+async function Rt(t) {
+  const r = await (await w.fetch(
+    `https://music.163.com/api/v6/playlist/detail?id=${t}&n=1000`,
+    we
+  )).json();
+  if (r.code !== 200)
+    throw new Error(`网易云歌单获取失败: ${r.msg || r.message || "未知错误"}`);
+  const n = r.playlist, o = (n.trackIds || []).map((y) => Number(y.id)), i = n.tracks || [];
+  if (i.length >= o.length && o.length > 0)
+    return { playlist: n, tracks: i };
+  const c = [...i], u = new Set(i.map((y) => Number(y.id))), f = 200;
+  for (let y = 0; y < o.length; y += f) {
+    const P = o.slice(y, y + f), U = JSON.stringify(P.map((S) => ({ id: S }))), m = await (await w.fetch("https://music.163.com/api/v3/song/detail", {
+      ...we,
+      method: "POST",
+      body: `c=${encodeURIComponent(U)}`,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: "https://music.163.com"
+      }
+    })).json(), B = (m == null ? void 0 : m.songs) || [];
+    for (const S of B) {
+      const C = Number(S.id);
+      u.has(C) || (u.add(C), c.push(S));
+    }
+  }
+  return { playlist: n, tracks: c };
+}
+async function $t(t) {
+  var y, P, U, A;
+  const e = `https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&disstid=${t}&format=json`, r = await w.fetch(e, { headers: ve }), n = xe(await r.text()), o = (y = n == null ? void 0 : n.cdlist) == null ? void 0 : y[0];
+  if (!o) return n;
+  const i = o.songlist || [], c = Number(o.songnum ?? o.total_song_num ?? i.length) || i.length;
+  if (console.log(`[QQ导入] 歌单 ${t}：总数=${c}，首批返回=${i.length}`), i.length >= c) return n;
+  const u = new Set(i.map((m) => m.songmid || m.songid || m.mid || m.id)), f = 100;
+  for (let m = i.length; m < c; m += f) {
+    const B = `https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg?type=1&json=1&utf8=1&onlysong=0&newsong=1&format=json&platform=yqq&hostUin=0&needNewCode=0&id=${t}&disstid=${t}&song_begin=${m}&song_num=${f}`;
+    try {
+      const S = await w.fetch(B, { headers: ve }), C = ((A = (U = (P = xe(await S.text())) == null ? void 0 : P.cdlist) == null ? void 0 : U[0]) == null ? void 0 : A.songlist) || [];
+      if (C.length === 0) break;
+      let pe = 0;
+      for (const j of C) {
+        const z = j.songmid || j.songid || j.mid || j.id;
+        z && u.has(z) || (z && u.add(z), i.push(j), pe++);
+      }
+      if (pe === 0) break;
+    } catch (S) {
+      console.warn(`[QQ导入] 分页补全失败 begin=${m}：`, S);
+      break;
+    }
+  }
+  return o.songlist = i, console.log(`[QQ导入] 歌单 ${t}：补全后共 ${i.length} 首`), n;
+}
+function Et() {
+  l.handle("playlist:netease", async (t, e) => Rt(e)), l.handle("playlist:qq", async (t, e) => (/^\d+$/.test(e) || (e = await St(e)), $t(e)));
+}
+const _t = He(import.meta.url), O = x.dirname(_t), I = process.platform === "openharmony";
+if (!I) {
+  const t = x.join(g.getPath("appData"), "bilimusic");
+  g.setPath("userData", t);
+  const e = x.join(g.getPath("appData"), "BiliMusic");
+  try {
+    !L.existsSync(t) && L.existsSync(e) && (L.cpSync(e, t, { recursive: !0 }), console.log("[BiliMusic] 已迁移旧目录数据:", e, "→", t));
+  } catch {
+  }
+}
+Re.registerSchemesAsPrivileged([
+  { scheme: "app", privileges: { standard: !0, secure: !0, supportFetchAPI: !0 } }
+]);
+g.commandLine.appendSwitch("remote-debugging-port", "17689");
+g.commandLine.appendSwitch("remote-allow-origins", "*");
+function Tt() {
+  const t = [
+    "https://*.hdslb.com/*",
+    "https://*.bilivideo.com/*",
+    "https://*.bilivideo.cn/*",
+    "https://*.akamaized.net/*",
+    "https://*.bilibili.com/*"
+  ], e = /* @__PURE__ */ new Map();
+  _.defaultSession.webRequest.onBeforeSendHeaders({ urls: t }, (n, o) => {
+    const i = n.requestHeaders, c = i.Origin || i.origin;
+    c && /^(https?|app):\/\//.test(c) && /\/\/(api|passport)\.bilibili\.com/.test(n.url) && e.set(n.id, c), i.Referer = "https://www.bilibili.com", i.Origin = "https://www.bilibili.com", o({ requestHeaders: i });
+  });
+  const r = { urls: ["https://api.bilibili.com/*", "https://passport.bilibili.com/*"] };
+  _.defaultSession.webRequest.onHeadersReceived(r, (n, o) => {
+    const i = {};
+    if (n.responseHeaders)
+      for (const [u, f] of Object.entries(n.responseHeaders))
+        u.toLowerCase().startsWith("access-control-allow") || (i[u] = f);
+    const c = e.get(n.id);
+    e.delete(n.id), i["access-control-allow-origin"] = [c || "*"], i["access-control-allow-credentials"] = ["true"], i["access-control-allow-methods"] = ["GET, POST, PUT, DELETE, OPTIONS"], i["access-control-allow-headers"] = ["*"], o({ responseHeaders: i });
+  });
+}
+let s = null, R = null, d = null, N = !1, D = null, le = !1, h = null, F = {
+  hasTrack: !1,
+  title: "未在播放",
+  artist: "搜索并播放音乐",
+  coverUrl: "",
+  isPlaying: !1,
+  queueLength: 0,
+  theme: "dark"
+};
+function ne(t = "icon.png") {
+  const e = process.env.VITE_DEV_SERVER_URL ? x.join(O, "../electron", t) : x.join(O, t);
+  return ze.createFromPath(e);
+}
+function Vt() {
+  return (I ? ne("tray.png") : ne()).resize({ width: 32, height: 32 });
+}
+function Le() {
+  return x.join(g.getPath("userData"), "renderer-persistent-store.json");
+}
+function ce() {
+  try {
+    const t = Le();
+    if (!L.existsSync(t)) return {};
+    const e = JSON.parse(L.readFileSync(t, "utf8"));
+    return !e || typeof e != "object" || Array.isArray(e) ? {} : Object.fromEntries(
+      Object.entries(e).filter((r) => typeof r[1] == "string")
+    );
+  } catch {
+    return {};
+  }
+}
+function Ae(t) {
+  try {
+    const e = Le();
+    L.mkdirSync(x.dirname(e), { recursive: !0 }), L.writeFileSync(e, JSON.stringify(t, null, 2));
+  } catch {
+  }
+}
+function Y() {
+  var t;
+  s || G(), process.platform === "darwin" && ((t = g.dock) == null || t.show()), s == null || s.show(), s != null && s.isMinimized() && s.restore(), s == null || s.focus();
+}
+function Be() {
+  R == null || R.setToolTip(F.hasTrack ? `${F.isPlaying ? "正在播放" : "已暂停"}: ${F.title}` : "BiliMusic"), d == null || d.webContents.send("tray:state", F);
+}
+function It() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    /* 深色为默认，body.light 切换为浅色，跟随 app 主题 */
+    :root {
+      --tray-menu-bg: linear-gradient(180deg, rgba(38, 38, 42, .94), rgba(18, 18, 20, .96)), rgba(24, 24, 26, .96);
+      --tray-menu-border: rgba(255, 255, 255, .12);
+      --tray-menu-shadow: 0 28px 80px rgba(0, 0, 0, .44), inset 0 1px rgba(255, 255, 255, .12);
+      --tray-text: #f7f7f8;
+      --tray-now-bg: rgba(255, 255, 255, .075);
+      --tray-now-border: rgba(255, 255, 255, .08);
+      --tray-cover-fallback: rgba(255, 255, 255, .62);
+      --tray-meta-sub: rgba(255, 255, 255, .48);
+      --tray-status: rgba(255, 255, 255, .44);
+      --tray-btn-bg: rgba(255, 255, 255, .1);
+      --tray-btn-bg-hover: rgba(255, 255, 255, .16);
+      --tray-btn-text: #fff;
+      --tray-actions-border: rgba(255, 255, 255, .1);
+      --tray-row-text: rgba(255, 255, 255, .82);
+      --tray-row-hover: rgba(255, 255, 255, .1);
+      --tray-count: rgba(255, 255, 255, .38);
+    }
+    body.light {
+      --tray-menu-bg: linear-gradient(180deg, rgba(252, 252, 253, .95), rgba(244, 245, 248, .97)), rgba(255, 255, 255, .96);
+      --tray-menu-border: rgba(24, 25, 28, .1);
+      --tray-menu-shadow: 0 28px 80px rgba(24, 25, 28, .18), inset 0 1px rgba(255, 255, 255, .9);
+      --tray-text: #18191C;
+      --tray-now-bg: rgba(24, 25, 28, .04);
+      --tray-now-border: rgba(24, 25, 28, .07);
+      --tray-cover-fallback: rgba(24, 25, 28, .5);
+      --tray-meta-sub: rgba(24, 25, 28, .5);
+      --tray-status: rgba(24, 25, 28, .5);
+      --tray-btn-bg: rgba(24, 25, 28, .06);
+      --tray-btn-bg-hover: rgba(24, 25, 28, .1);
+      --tray-btn-text: #18191C;
+      --tray-actions-border: rgba(24, 25, 28, .08);
+      --tray-row-text: rgba(24, 25, 28, .82);
+      --tray-row-hover: rgba(24, 25, 28, .06);
+      --tray-count: rgba(24, 25, 28, .4);
+    }
+    * { box-sizing: border-box; user-select: none; }
+    body {
+      width: 330px;
+      height: 292px;
+      margin: 0;
+      overflow: hidden;
+      color: var(--tray-text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: transparent;
+    }
+    .menu {
+      width: 100%;
+      height: 100%;
+      padding: 14px;
+      border-radius: 22px;
+      background: var(--tray-menu-bg);
+      border: 1px solid var(--tray-menu-border);
+      box-shadow: var(--tray-menu-shadow);
+      backdrop-filter: blur(30px) saturate(160%);
+    }
+    .now {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-height: 76px;
+      padding: 10px;
+      border-radius: 16px;
+      background: var(--tray-now-bg);
+      border: 1px solid var(--tray-now-border);
+    }
+    .cover {
+      width: 56px;
+      height: 56px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      flex: 0 0 auto;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(255,55,95,.42), rgba(255,255,255,.08));
+      box-shadow: 0 12px 30px rgba(0,0,0,.22);
+    }
+    .cover img { width: 100%; height: 100%; object-fit: cover; display: none; }
+    .cover span { color: var(--tray-cover-fallback); font-size: 22px; }
+    .meta { min-width: 0; flex: 1; }
+    .meta strong, .meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .meta strong { font-size: 14px; line-height: 1.2; font-weight: 760; }
+    .meta small { margin-top: 5px; color: var(--tray-meta-sub); font-size: 12px; font-weight: 560; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 12px 2px 10px;
+      color: var(--tray-status);
+      font-size: 11px;
+      font-weight: 680;
+    }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #8e8e93;
+      box-shadow: 0 0 0 transparent;
+    }
+    .status.is-playing .dot {
+      background: #30d158;
+      box-shadow: 0 0 14px rgba(48,209,88,.65);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1.25fr 1fr;
+      gap: 10px;
+      padding: 0 4px 12px;
+    }
+    button {
+      height: 42px;
+      border: 0;
+      border-radius: 999px;
+      color: var(--tray-btn-text);
+      background: var(--tray-btn-bg);
+      cursor: pointer;
+      font: 780 13px/1 system-ui, sans-serif;
+      transition: transform .16s ease, background .16s ease, opacity .16s ease;
+    }
+    button:hover { background: var(--tray-btn-bg-hover); transform: translateY(-1px); }
+    button:active { transform: scale(.96); }
+    button:disabled { opacity: .42; cursor: default; transform: none; }
+    .play {
+      background: #ff375f;
+      color: #fff;
+      box-shadow: 0 14px 30px rgba(255,55,95,.26);
+      font-size: 16px;
+    }
+    .play:hover { background: #ff375f; }
+    .actions {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid var(--tray-actions-border);
+      padding-top: 12px;
+    }
+    .row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 13px;
+      text-align: left;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--tray-row-text);
+    }
+    .row:hover { background: var(--tray-row-hover); }
+    .row.danger { color: #ff6961; }
+    .count { color: var(--tray-count); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="menu">
+    <div class="now">
+      <div class="cover"><img id="cover" /><span id="fallback">♪</span></div>
+      <div class="meta">
+        <strong id="title">未在播放</strong>
+        <small id="artist">搜索并播放音乐</small>
+      </div>
+    </div>
+    <div id="status" class="status"><span class="dot"></span><span id="statusText">空闲</span></div>
+    <div class="controls">
+      <button id="prev" title="上一首">⏮</button>
+      <button id="play" class="play" title="播放/暂停">▶</button>
+      <button id="next" title="下一首">⏭</button>
+    </div>
+    <div class="actions">
+      <button class="row" id="show"><span>显示 BiliMusic</span><span class="count" id="queue">0 首</span></button>
+      <button class="row danger" id="quit"><span>退出应用</span><span>⌘Q</span></button>
+    </div>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron')
+    const $ = (id) => document.getElementById(id)
+    let state = { hasTrack: false, title: '未在播放', artist: '搜索并播放音乐', coverUrl: '', isPlaying: false, queueLength: 0, theme: 'dark' }
+    function render(next) {
+      state = next || state
+      document.body.classList.toggle('light', (state.theme || 'dark') === 'light')
+      $('title').textContent = state.title || '未在播放'
+      $('artist').textContent = state.artist || '搜索并播放音乐'
+      $('status').className = 'status' + (state.isPlaying ? ' is-playing' : '')
+      $('statusText').textContent = state.hasTrack ? (state.isPlaying ? '正在播放' : '已暂停') : '空闲'
+      $('play').textContent = state.isPlaying ? '⏸' : '▶'
+      $('queue').textContent = (state.queueLength || 0) + ' 首'
+      $('prev').disabled = $('play').disabled = $('next').disabled = !state.hasTrack
+      if (state.coverUrl) {
+        $('cover').src = state.coverUrl
+        $('cover').style.display = 'block'
+        $('fallback').style.display = 'none'
+      } else {
+        $('cover').removeAttribute('src')
+        $('cover').style.display = 'none'
+        $('fallback').style.display = 'block'
+      }
+    }
+    ipcRenderer.on('tray:state', (_event, next) => render(next))
+    ipcRenderer.invoke('tray:get-state').then(render)
+    $('prev').onclick = () => ipcRenderer.send('tray:command', 'prev')
+    $('play').onclick = () => ipcRenderer.send('tray:command', 'toggle-play')
+    $('next').onclick = () => ipcRenderer.send('tray:command', 'next')
+    $('show').onclick = () => ipcRenderer.send('tray:command', 'show-window')
+    $('quit').onclick = () => ipcRenderer.send('tray:command', 'quit')
+  <\/script>
+</body>
+</html>`;
+}
+function de() {
+  return I ? null : d || (N = !1, d = new se({
+    width: 330,
+    height: 292,
+    show: !1,
+    frame: !1,
+    resizable: !1,
+    skipTaskbar: !0,
+    alwaysOnTop: !0,
+    transparent: !0,
+    backgroundColor: "#00000000",
+    opacity: 0,
+    paintWhenInitiallyHidden: !0,
+    webPreferences: {
+      nodeIntegration: !0,
+      contextIsolation: !1
+    }
+  }), d.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(It())}`), d.once("ready-to-show", () => {
+    if (N = !0, D) {
+      const t = D;
+      D = null, Fe(t.x, t.y);
+    }
+  }), d.on("blur", () => {
+    d == null || d.setOpacity(0), d == null || d.hide();
+  }), d.on("closed", () => {
+    d = null, N = !1, D = null;
+  }), d);
+}
+function Fe(t, e) {
+  const r = de();
+  if (r) {
+    if (!N) {
+      D = { x: t, y: e };
+      return;
+    }
+    r.setPosition(t, e, !1), Be(), r.setOpacity(0), r.showInactive(), setTimeout(() => {
+      d != null && d.isVisible() && (d.setOpacity(1), d.focus());
+    }, 20);
+  }
+}
+function Pt() {
+  if (I || !R) return;
+  const t = de();
+  if (!t) return;
+  if (t.isVisible()) {
+    t.setOpacity(0), t.hide();
+    return;
+  }
+  const e = R.getBounds(), { workArea: r } = J.getDisplayNearestPoint({ x: e.x, y: e.y }), n = 330, o = 292, i = Math.round(Math.min(Math.max(e.x + e.width / 2 - n / 2, r.x + 8), r.x + r.width - n - 8)), c = e.y - o - 10, u = e.y + e.height + 10, f = c >= r.y ? c : Math.min(u, r.y + r.height - o - 8);
+  Fe(i, Math.round(f));
+}
+function ke() {
+  R || (R = new Oe(Vt()), R.setToolTip("BiliMusic"), R.on("click", Y), R.on("double-click", Y), I || (R.on("right-click", Pt), de()));
+}
+function Ce() {
+  var t;
+  s == null || s.hide(), process.platform === "darwin" && ((t = g.dock) == null || t.hide());
+}
+let k = {
+  visible: !1,
+  line: "",
+  nextLine: "",
+  isPlaying: !1,
+  hasTrack: !1,
+  locked: !0,
+  style: {}
+};
+function Ut() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    html, body { background: transparent; overflow: hidden; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    #root {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+    }
+    body.unlocked #root { cursor: move; }
+    .lyric-box {
+      max-width: 96vw;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .line { display: block; line-height: 1.35; }
+    .line.next { opacity: .55; font-size: .72em; margin-top: 2px; }
+    /* 锁定提示：解锁时显示边框方便定位 */
+    body.unlocked .lyric-box {
+      outline: 1px dashed rgba(255,255,255,.4);
+      outline-offset: 8px;
+      border-radius: 8px;
+    }
+    .badge {
+      position: fixed;
+      top: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: rgba(0,0,0,.55);
+      color: #fff;
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+    }
+    body.unlocked .badge { opacity: .9; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="lyric-box">
+      <span class="line current" id="line"></span>
+      <span class="line next" id="nextLine"></span>
+    </div>
+  </div>
+  <div class="badge">拖动移动 · 在设置中锁定</div>
+  <script>
+    const { ipcRenderer } = require('electron')
+    const lineEl = document.getElementById('line')
+    const nextEl = document.getElementById('nextLine')
+
+    let style = {}
+    function applyStyle(s) {
+      style = s || {}
+      const box = document.querySelector('.lyric-box')
+      const line = lineEl
+      line.style.fontSize = (style.fontSize || 28) + 'px'
+      line.style.fontWeight = style.bold ? '800' : '600'
+      line.style.color = style.color || '#ff375f'
+      if (style.outline) {
+        // 描边：用多重 text-shadow 模拟
+        const ow = style.outlineWidth || 2
+        const oc = style.outlineColor || 'rgba(0,0,0,.85)'
+        line.style.textShadow = [0,1,2,3,4,5,6,7,8].flatMap(dx =>
+          [0,1,2,3,4,5,6,7,8].map(dy =>
+            (dx*dx+dy*dy <= ow*ow && (dx||dy)) ? \`\${dx}px \${dy}px 0 \${oc}\` : []
+          )
+        ).filter(Boolean).join(',') + ', 0 2px 12px rgba(0,0,0,.4)'
+      } else {
+        line.style.textShadow = style.shadow === false ? 'none' : '0 2px 12px rgba(0,0,0,.5)'
+      }
+      // 背景条
+      if (style.showBg) {
+        box.style.background = style.bgColor || 'rgba(0,0,0,.35)'
+        box.style.padding = '8px 18px'
+        box.style.borderRadius = (style.bgRadius || 12) + 'px'
+      } else {
+        box.style.background = 'transparent'
+        box.style.padding = '0'
+        box.style.borderRadius = '0'
+      }
+    }
+
+    ipcRenderer.on('desktop-lyrics:state', (_e, s) => {
+      if (!s) return
+      if (s.style) applyStyle(s.style)
+      lineEl.textContent = s.line || ''
+      nextEl.textContent = s.nextLine || ''
+      nextEl.style.display = s.nextLine ? 'block' : 'none'
+      document.body.classList.toggle('unlocked', !s.locked)
+    })
+
+    // 解锁状态下允许拖动窗口
+    document.addEventListener('mousedown', (e) => {
+      ipcRenderer.send('desktop-lyrics:drag-start')
+    })
+
+    applyStyle({})
+  <\/script>
+</body>
+</html>`;
+}
+function je() {
+  return h || (h = new se({
+    width: 900,
+    height: 120,
+    show: !1,
+    frame: !1,
+    resizable: !1,
+    skipTaskbar: !0,
+    alwaysOnTop: !0,
+    transparent: !0,
+    backgroundColor: "#00000000",
+    hasShadow: !1,
+    paintWhenInitiallyHidden: !0,
+    webPreferences: {
+      nodeIntegration: !0,
+      contextIsolation: !1
+    }
+  }), h.setAlwaysOnTop(!0, "screen-saver"), h.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(Ut())}`), h.once("ready-to-show", () => {
+    k.visible && De();
+  }), h.on("closed", () => {
+    h = null;
+  }), h);
+}
+function ue() {
+  h && h.setIgnoreMouseEvents(k.locked, { forward: !0 });
+}
+function De() {
+  const t = je();
+  if (!t.isVisible()) {
+    const { workArea: e } = J.getPrimaryDisplay();
+    t.setPosition(
+      Math.round(e.x + (e.width - 900) / 2),
+      Math.round(e.y + e.height - 120 - 120),
+      !1
+    ), t.showInactive();
+  }
+  ue();
+}
+function qt() {
+  h == null || h.hide();
+}
+function Me() {
+  h == null || h.webContents.send("desktop-lyrics:state", k);
+}
+l.on("desktop-lyrics:set-state", (t, e) => {
+  if (!e || typeof e != "object") return;
+  const r = k.visible;
+  k = { ...k, ...e }, k.visible && !r && De(), !k.visible && r && qt(), k.visible && (je(), ue(), Me());
+});
+l.on("desktop-lyrics:drag-start", () => {
+  if (k.locked || !h) return;
+  const t = h, e = J.getCursorScreenPoint(), r = t.getBounds(), n = e.x - r.x, o = e.y - r.y, c = setInterval(() => {
+    if (!h || h.isDestroyed()) {
+      clearInterval(c);
+      return;
+    }
+    const u = J.getCursorScreenPoint();
+    t.setPosition(u.x - n, u.y - o, !1);
+  }, 16);
+  setTimeout(() => clearInterval(c), 6e4);
+});
+l.on("desktop-lyrics:toggle-lock", () => {
+  k.locked = !k.locked, ue(), Me();
+});
+function Lt(t) {
+  if (t === "show-window") {
+    Y(), d == null || d.hide();
+    return;
+  }
+  if (t === "quit") {
+    le = !0, d == null || d.close(), s == null || s.destroy(), g.quit();
+    return;
+  }
+  s == null || s.webContents.send("tray:player-command", t);
+}
+function G() {
+  s = new se({
+    title: "BiliMusic",
+    width: 1280,
+    height: 800,
+    minWidth: 1024,
+    minHeight: 640,
+    frame: !1,
+    minimizable: !0,
+    maximizable: !0,
+    closable: !0,
+    ...I ? {} : { titleBarStyle: "hidden" },
+    backgroundColor: "#F6F7F9",
+    icon: ne(),
+    webPreferences: {
+      preload: process.env.VITE_DEV_SERVER_URL ? x.join(O, "../electron/preload.cjs") : x.join(O, "preload.cjs"),
+      contextIsolation: !0,
+      nodeIntegration: !1
+    }
+  }), process.env.VITE_DEV_SERVER_URL ? (s.loadURL(process.env.VITE_DEV_SERVER_URL), s.webContents.openDevTools()) : s.loadURL("app://local/index.html"), s.on("close", (r) => {
+    le || (r.preventDefault(), Ce());
+  }), s.on("closed", () => {
+    s = null;
+  });
+  const t = () => {
+    s == null || s.webContents.send("window:maximized-change", !!(s != null && s.isMaximized() || s != null && s.isFullScreen()));
+  }, e = () => {
+    s == null || s.webContents.send("window:fullscreen-change", !!(s != null && s.isFullScreen()));
+  };
+  s.on("maximize", t), s.on("unmaximize", t), s.on("enter-full-screen", () => {
+    t(), e();
+  }), s.on("leave-full-screen", () => {
+    t(), e();
+  });
+}
+l.on("window:minimize", () => s == null ? void 0 : s.minimize());
+l.on("window:maximize", () => {
+  s != null && s.isMaximized() ? s.unmaximize() : s == null || s.maximize();
+});
+l.on("window:close", Ce);
+l.handle("window:isMaximized", () => !!(s != null && s.isMaximized() || s != null && s.isFullScreen()));
+l.on("window:toggle-fullscreen", () => {
+  if (!s) return;
+  const t = !s.isFullScreen();
+  s.setFullScreen(t), s.webContents.send("window:fullscreen-change", t), s.webContents.send("window:maximized-change", !!(s.isMaximized() || t));
+});
+l.on("window:set-button-visibility", (t, e) => {
+  if (!I) return;
+  const r = !!e, n = s == null ? void 0 : s.setWindowButtonVisibility;
+  typeof n == "function" && n.call(s, r), s == null || s.setTitle(`__BILIMUSIC_WINDOW_BUTTONS__:${r ? "show" : "hide"}`);
+});
+l.handle("window:isFullscreen", () => !!(s != null && s.isFullScreen()));
+l.on("tray:player-state", (t, e) => {
+  F = {
+    hasTrack: !!(e != null && e.hasTrack),
+    title: String((e == null ? void 0 : e.title) || "未在播放"),
+    artist: String((e == null ? void 0 : e.artist) || "搜索并播放音乐"),
+    coverUrl: String((e == null ? void 0 : e.coverUrl) || ""),
+    isPlaying: !!(e != null && e.isPlaying),
+    queueLength: Number((e == null ? void 0 : e.queueLength) || 0)
+  }, Be();
+});
+l.on("tray:command", (t, e) => Lt(e));
+l.handle("tray:get-state", () => F);
+l.on("persistent-storage:get", (t, e) => {
+  if (typeof e != "string") {
+    t.returnValue = null;
+    return;
+  }
+  t.returnValue = ce()[e] ?? null;
+});
+l.on("persistent-storage:set", (t, e, r) => {
+  if (typeof e != "string" || typeof r != "string") return;
+  const n = ce();
+  n[e] = r, Ae(n);
+});
+l.on("persistent-storage:remove", (t, e) => {
+  if (typeof e != "string") return;
+  const r = ce();
+  delete r[e], Ae(r);
+});
+l.handle("shell:open-external", (t, e) => {
+  if (typeof e == "string" && /^https?:\/\//i.test(e)) return Se.openExternal(e);
+});
+g.whenReady().then(() => {
+  process.env.VITE_DEV_SERVER_URL || Re.handle("app", async (t) => {
+    const { pathname: e } = new URL(t.url), r = x.join(Pe(), decodeURIComponent(e));
+    try {
+      return await w.fetch(Ne(r).toString());
+    } catch (n) {
+      throw console.log("[BiliMusic-OTA] app:// fetch FAILED:", r, "—", n instanceof Error ? n.message : String(n)), n;
+    }
+  }), Tt(), Je(), Ke(), vt(), Et(), pt({
+    window: () => s,
+    bundledRendererRoot: x.join(O, "../dist"),
+    reload: () => {
+      s == null || s.loadURL("app://local/index.html");
+    }
+  }), I ? (ke(), G()) : (G(), ke());
+});
+g.on("window-all-closed", () => {
+  le && process.platform !== "darwin" && g.quit();
+});
+g.on("activate", () => {
+  s === null ? G() : Y();
+});

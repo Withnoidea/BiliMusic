@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react'
-import { Disc3, Loader2, Play, RefreshCw, TrendingUp } from 'lucide-react'
+import TrackSkeleton from '@/components/TrackSkeleton'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Disc3, Play, RefreshCw, TrendingUp } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
-import { getMusicRanking, type VideoInfo } from '@/services/api'
+import { getMusicRanking, type DiscoverSource, type VideoInfo } from '@/services/api'
 import type { Track } from '@/types'
 import {
   ActionButton,
@@ -34,32 +35,39 @@ export default function Discover() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const player = usePlayer()
+  const [batch, setBatch] = useState(0)
+  const requestId = useRef(0)
+  const sources: DiscoverSource[] = ['hot', 'original', 'latest']
+  const labels = ['热门音乐榜', '原创音乐榜', '最新音乐投稿']
+  const sourceLabel = labels[batch % sources.length]
 
   useEffect(() => {
-    loadMusicRanking()
-  }, [])
+    void loadMusicRanking(batch)
+    return () => { ++requestId.current }
+  }, [batch])
 
-  async function loadMusicRanking() {
+  async function loadMusicRanking(cursor: number) {
+    const request = ++requestId.current
     setLoading(true)
     setError(null)
     try {
-      const data = await getMusicRanking()
-      setTracks(data)
+      const data = await getMusicRanking({ source: sources[cursor % sources.length], page: Math.floor(cursor / sources.length) + 1, pageSize: 20 })
+      if (request === requestId.current) setTracks(data)
     } catch (e: any) {
-      setError(e.message || '加载失败')
+      if (request === requestId.current) setError(e.message || '加载失败')
     } finally {
-      setLoading(false)
+      if (request === requestId.current) setLoading(false)
     }
   }
 
   const handlePlayAll = useCallback(() => {
-    const playlist = tracks.slice(0, 12).map(videoToTrack)
+    const playlist = tracks.map(videoToTrack)
     if (playlist.length > 0) player.playAll(playlist)
   }, [tracks, player])
 
   const handlePlayOne = useCallback((video: VideoInfo) => {
-    player.playNow(videoToTrack(video))
-  }, [player])
+    player.playFromList(videoToTrack(video), tracks.map(videoToTrack))
+  }, [player, tracks])
 
   const featured = tracks.slice(0, 3)
   const list = tracks.slice(3)
@@ -67,8 +75,14 @@ export default function Discover() {
 
   return (
     <MusicPageShell>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span className="text-caption">{sourceLabel} · 第 {Math.floor(batch / sources.length) + 1} 批</span>
+        <ActionButton tone="subtle" disabled={loading} onClick={() => setBatch(value => value + 1)}>
+          <RefreshCw size={16} /> {loading ? '加载中' : '换一换 / 刷新'}
+        </ActionButton>
+      </div>
       <MusicHero
-        eyebrow="B站音乐区排行榜"
+        eyebrow={sourceLabel}
         title="发现新声音"
         subtitle="精选热门音乐投稿，用 Apple Music 式的节奏探索今天值得播放的内容。"
         image={heroImage}
@@ -82,7 +96,7 @@ export default function Discover() {
       />
 
       {loading ? (
-        <div className="am-loading"><Loader2 size={30} className="spin" /></div>
+        <TrackSkeleton />
       ) : error ? (
         <EmptyLibrary
           icon={<RefreshCw size={38} />}
@@ -108,7 +122,7 @@ export default function Discover() {
             </FeaturedGrid>
           </MusicSection>
 
-          <MusicSection title="热门排行榜" icon={<Disc3 size={22} />}>
+          <MusicSection title={sourceLabel} icon={<Disc3 size={22} />}>
             <TrackList>
               {list.map((video, index) => {
                 const track = videoToTrack(video)

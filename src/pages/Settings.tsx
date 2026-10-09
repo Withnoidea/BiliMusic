@@ -1,3 +1,5 @@
+import { openDownloadsFolder, getDownloadsFolderPath, friendlyDownloadError } from '@/services/downloadManager'
+import { usePlayer } from '@/contexts/PlayerContext'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Cloud,
@@ -19,11 +21,20 @@ import {
   Settings as SettingsIcon,
   Sun,
   UserRound,
+  Captions,
+  Lock,
+  LockOpen,
 } from 'lucide-react'
 import { ActionButton, MusicHero, MusicPageShell, MusicSection } from '@/components/AppleMusicPage'
 import { useTheme } from '@/hooks/useTheme'
 import { useAppSettings } from '@/hooks/useAppSettings'
 import { useAuth } from '@/contexts/AuthContext'
+import {
+  loadDesktopLyricsSettings,
+  saveDesktopLyricsSettings,
+  type DesktopLyricsSettings,
+} from '@/hooks/useDesktopLyrics'
+import type { DesktopLyricsStyle } from '@/types/electron.d'
 import { createPlaylistsExport, importPlaylistsFromText } from '@/utils/storage'
 import { runSync, forceUpload, forceDownload, getLastSync, SYNC_STATE_EVENT, WEBDAV_CONFIGURED_EVENT, type SyncResult } from '@/utils/sync'
 import type { AppSettings, SidebarState, ThemeMode } from '@/types'
@@ -37,6 +48,13 @@ export default function Settings() {
   const [appVersion, setAppVersion] = useState('1.0.0')
   const [updateStatus, setUpdateStatus] = useState('')
   const [updateAction, setUpdateAction] = useState<'restart' | 'reload' | null>(null)
+  const [dl, setDl] = useState<DesktopLyricsSettings>(() => loadDesktopLyricsSettings())
+
+  const updateDl = (patch: { enabled?: boolean; locked?: boolean; style?: Partial<DesktopLyricsStyle> }) => {
+    const next: DesktopLyricsSettings = { ...dl, ...patch, style: { ...dl.style, ...(patch.style || {}) } }
+    setDl(next)
+    saveDesktopLyricsSettings(next)
+  }
 
   useEffect(() => {
     window.electronAPI?.getAppVersion?.()?.then((v) => {
@@ -84,6 +102,9 @@ export default function Settings() {
   const [davPass, setDavPass] = useState('')
   const [davConfigured, setDavConfigured] = useState(false)
   const [syncMessage, setSyncMessage] = useState('')
+  const { showToast } = usePlayer()
+  const [resolvedDownloadDir, setResolvedDownloadDir] = useState('')
+  useEffect(() => { getDownloadsFolderPath().then(setResolvedDownloadDir).catch(() => setResolvedDownloadDir('请重新选择下载目录')) }, [settings.downloadDir])
   const [syncBusy, setSyncBusy] = useState(false)
   const [lastSync, setLastSync] = useState(getLastSync())
 
@@ -133,9 +154,12 @@ export default function Settings() {
     setSyncBusy(false)
   }
 
-  const changeDownloadDir = () => {
-    const next = window.prompt('请输入下载目录', settings.downloadDir)
-    if (next?.trim()) setAppSettings({ downloadDir: next.trim() })
+  const changeDownloadDir = async () => {
+    try {
+      if (!window.electronAPI?.selectFolder) { showToast('请在桌面客户端中更改下载目录'); return }
+      const selected = await window.electronAPI.selectFolder()
+      if (selected) { setAppSettings({ downloadDir: selected }); showToast('下载目录已更新，旧音轨仍可在原目录播放') }
+    } catch (error) { showToast(friendlyDownloadError(error)) }
   }
 
   const exportPlaylists = () => {
@@ -227,6 +251,86 @@ export default function Settings() {
             </SettingsRow>
           </SettingsGroup>
 
+          <SettingsGroup title="桌面歌词" icon={<Captions size={20} />}>
+            <SettingsRow label="启用桌面歌词" description="在桌面悬浮显示实时歌词（类似 QQ 音乐）">
+              <ToggleSwitch checked={dl.enabled} onChange={() => updateDl({ enabled: !dl.enabled })} />
+            </SettingsRow>
+            {dl.enabled && (
+              <>
+                <SettingsRow
+                  label={dl.locked ? '解锁以拖动' : '锁定位置'}
+                  description={dl.locked ? '当前鼠标穿透，不挡桌面操作' : '可拖动歌词位置，点击锁定恢复穿透'}
+                >
+                  <button type="button" className="am-action am-action--subtle" onClick={() => updateDl({ locked: !dl.locked })}>
+                    {dl.locked ? <LockOpen size={15} /> : <Lock size={15} />}
+                    {dl.locked ? '解锁拖动' : '锁定'}
+                  </button>
+                </SettingsRow>
+                <SettingsRow label="字号">
+                  <input
+                    type="range"
+                    min={18}
+                    max={64}
+                    value={dl.style.fontSize}
+                    onChange={(e) => updateDl({ style: { fontSize: Number(e.target.value) } })}
+                    style={{ width: 140 }}
+                  />
+                  <span style={{ marginLeft: 8, minWidth: 36, textAlign: 'right' }}>{dl.style.fontSize}px</span>
+                </SettingsRow>
+                <SettingsRow label="颜色">
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {['#ff375f', '#ffffff', '#ffd60a', '#30d158', '#0a84ff', '#bf5af2'].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => updateDl({ style: { color: c } })}
+                        aria-label={c}
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          background: c,
+                          border: dl.style.color === c ? '2px solid var(--color-foreground)' : '1px solid rgba(128,128,128,.4)',
+                          cursor: 'pointer',
+                        }}
+                      />
+                    ))}
+                    <input
+                      type="color"
+                      value={dl.style.color.startsWith('#') ? dl.style.color : '#ff375f'}
+                      onChange={(e) => updateDl({ style: { color: e.target.value } })}
+                      style={{ width: 28, height: 24, border: 'none', background: 'none', cursor: 'pointer' }}
+                    />
+                  </div>
+                </SettingsRow>
+                <SettingsRow label="描边" description="深色描边提升浅色背景下的可读性">
+                  <ToggleSwitch checked={dl.style.outline} onChange={() => updateDl({ style: { outline: !dl.style.outline } })} />
+                </SettingsRow>
+                <SettingsRow label="背景条" description="歌词后面加半透明底条">
+                  <ToggleSwitch checked={dl.style.showBg} onChange={() => updateDl({ style: { showBg: !dl.style.showBg } })} />
+                </SettingsRow>
+                <SettingsRow label="加粗">
+                  <ToggleSwitch checked={dl.style.bold} onChange={() => updateDl({ style: { bold: !dl.style.bold } })} />
+                </SettingsRow>
+                <SettingsRow label="预览">
+                  <span
+                    style={{
+                      fontSize: Math.min(dl.style.fontSize, 22),
+                      fontWeight: dl.style.bold ? 800 : 600,
+                      color: dl.style.color,
+                      textShadow: dl.style.outline ? '0 0 2px rgba(0,0,0,.9), 0 0 2px rgba(0,0,0,.9)' : 'none',
+                      background: dl.style.showBg ? dl.style.bgColor : 'transparent',
+                      padding: dl.style.showBg ? '2px 10px' : 0,
+                      borderRadius: dl.style.showBg ? dl.style.bgRadius : 0,
+                    }}
+                  >
+                    歌词预览 Sample
+                  </span>
+                </SettingsRow>
+              </>
+            )}
+          </SettingsGroup>
+
           <SettingsGroup title="歌单迁移" icon={<FileDown size={20} />}>
             <div className="settings-actions settings-actions--stacked">
               <button type="button" onClick={exportPlaylists}>
@@ -292,9 +396,16 @@ export default function Settings() {
           <SettingsGroup title="下载" icon={<Download size={20} />}>
             <SettingsRow label="下载目录">
               <div className="settings-path">
-                <span>{settings.downloadDir}</span>
-                <button type="button" onClick={changeDownloadDir}>
+                <span title={resolvedDownloadDir}>{resolvedDownloadDir || '默认下载目录'}</span>
+                <button
+                  type="button"
+                  onClick={() => void openDownloadsFolder().catch(error => showToast(friendlyDownloadError(error)))}
+                  title="在文件资源管理器中打开"
+                >
                   <FolderOpen size={14} />
+                  打开目录
+                </button>
+                <button type="button" onClick={changeDownloadDir} title="更改下载目录">
                   更改
                 </button>
               </div>

@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "packaged": true,
+  "checks": [
+    "dynamic discovery dimensions and pagination",
+    "recommendation durations and detail fallback",
+    "full favorites and playlist queues",
+    "sequential next/previous",
+    "shuffle full coverage and history",
+    "QR double-store persistence and immediate profile refresh",
+    "idle lyric preview and long-line ellipsis",
+    "four-edge lyric clamp, no incremental drift, blur/cancel/global release recovery",
+    "production debug switch closed",
+    "no credential bridge",
+    "download completion",
+    "verified local playback without playUrl",
+    "720px responsive layout and metadata legibility",
+    "all three global media shortcuts registered",
+    "error refresh and position recovery",
+    "path boundary rejection",
+    "authorized folder selection and opening",
+    "680px minimum layout",
+    "hidden-window playback controls",
+    "keyboard slider tooltip",
+    "all windows sandboxed and isolated",
+    "no renderer console errors"
+  ],
+  "playRequests": 4,
+  "viewport": {
+    "width": 721,
+    "body": 721,
+    "main": 637
+  }
+}

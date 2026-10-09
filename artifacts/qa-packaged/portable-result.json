@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "files": 74,
+  "checks": [
+    "ZIP inventory matches win-unpacked",
+    "all ZIP entries SHA256 match unpacked files"
+  ]
+}

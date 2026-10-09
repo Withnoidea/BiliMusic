@@ -4054,3 +4054,54 @@ body {
     flex-direction: column;
   }
 }
+
+/* Player polish: the cover, not a fixed gradient, gives the room its colour. */
+.player-bar::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(ellipse at 18% 110%, rgba(var(--cover-color), .28), transparent 68%); transition: background 900ms ease; }
+.local-audio-badge { white-space: nowrap; display: inline-block; color: var(--color-primary); font: 650 9px/1.3 var(--font-body); letter-spacing: .08em; }
+.player-slider:focus-visible { outline: 2px solid var(--color-primary) !important; outline-offset: 4px; border-radius: 8px; }
+.player-slider__tooltip { position: absolute; bottom: calc(100% + 7px); transform: translateX(-50%); padding: 5px 9px; border-radius: 7px; color: var(--color-foreground); background: var(--color-background); border: 1px solid var(--color-border); box-shadow: 0 4px 16px #0002; white-space: nowrap; font: 650 11px/1.3 var(--font-body); font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5; }
+.now-playing-cover-glow { background: radial-gradient(ellipse, rgba(var(--cover-color), .55), transparent 68%); }
+.download-summary { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; color: var(--color-muted); padding: 22px 2px; font-size: 12px; }
+.download-summary > span { display: flex; align-items: center; gap: 8px; }
+.download-summary strong { font: 700 20px/1.2 var(--font-body); color: var(--color-foreground); font-variant-numeric: tabular-nums; }
+.download-summary__path { min-width: 0; max-width: 100%; overflow-wrap: anywhere; margin-left: auto; }
+.download-jobs { border: 1px solid var(--color-border); border-radius: 18px; overflow: hidden; }
+.download-job { padding: 16px 20px; display: flex; align-items: center; gap: 24px; background: var(--glass-bg); }
+.download-job + .download-job { border-top: 1px solid var(--color-border); }
+.download-job__copy { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.download-job__copy strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-job__copy span { color: var(--color-muted); font-size: 12px; }
+.download-job progress { accent-color: var(--color-primary); width: 130px; height: 5px; flex-shrink: 0; }
+.empty-library-action { display: flex; justify-content: center; margin: -42px 0 32px; position: relative; }
+.am-empty { padding: 28px 24px 68px; box-shadow: none; }
+.am-empty p { max-width: 440px; line-height: 1.8; }
+.track-skeletons { display: grid; gap: 12px; padding-block: 16px; }
+.track-skeleton { display: flex; align-items: center; gap: 18px; padding: 10px 16px; }
+.track-skeleton > div:nth-child(2) { flex: 1; display: grid; gap: 10px; }
+.track-skeleton__cover { width: 48px; height: 48px; border-radius: 10px; }
+.track-skeleton__title { width: 58%; height: 13px; border-radius: 5px; }
+.track-skeleton__artist { width: 30%; height: 10px; border-radius: 5px; }
+.track-skeleton__time { width: 38px; height: 10px; border-radius: 5px; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+@media (max-width: 1100px) {
+  .player-bar { gap: 16px !important; padding-inline: 18px !important; }
+  .player-bar__track { width: 220px !important; }
+  .player-bar__tools { width: 194px !important; gap: 6px !important; }
+  .app-content { padding: 22px !important; }
+}
+@media (max-width: 860px) {
+  .player-bar { gap: 12px !important; padding-inline: 14px !important; }
+  .player-bar__track { width: 180px !important; }
+  .player-bar__track > button:not(.player-bar__metadata) { display: none !important; }
+  .player-bar__transport { min-width: 210px !important; }
+  .player-bar__tools { width: 94px !important; }
+  .player-bar__tools > button:first-child { display: none !important; }
+  .player-bar__volume > [data-slider] { display: none !important; }
+  .am-track-row { gap: 10px; padding-inline: 10px; }
+  .am-track-row__index { width: 20px; }
+  .am-hero__content h1 { font-size: 36px; }
+  .app-content { padding: 18px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

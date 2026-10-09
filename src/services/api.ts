@@ -1,3 +1,5 @@
+import { parseDuration } from '@/utils/duration'
+import * as rendererApi from '@/services/bilibiliApi'
 /**
  * biliMusic API 适配层
  *
@@ -11,21 +13,12 @@ function isElectron(): boolean {
   return !!window.electronAPI?.biliApi
 }
 
-// 在 Electron 环境下直接用浏览器 fetch（CORS 已被主进程绕过）
-// 相比 IPC net.fetch，浏览器 fetch 自带完整请求头/Cookie，不会被 B站反爬拦截
+// Desktop credentials stay in the main-process gateway.
 async function electronFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const url = new URL('https://api.bilibili.com' + path)
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
-  }
-  const resp = await fetch(url.toString(), {
-    credentials: 'include',
-    headers: { Referer: 'https://www.bilibili.com' },
-  })
-  const data = await resp.json()
-  if (data.code !== 0) {
-    throw { code: data.code, message: data.message, path }
-  }
+  const query = new URLSearchParams()
+  Object.entries(params || {}).forEach(([key, value]) => query.set(key, String(value)))
+  const data = await window.electronAPI.biliApi.request(path + (query.size ? '?' + query : ''))
+  if (data.code !== 0) throw { code: data.code, message: data.message, path }
   return data.data as T
 }
 
@@ -43,10 +36,10 @@ export interface SearchItem {
 
 function normalizePic(pic: string): string {
   if (!pic) return ''
-  if (pic.startsWith('https://')) return pic
+  if (pic.startsWith('https://') || pic.startsWith('data:image/')) return pic
   if (pic.startsWith('http://')) return pic.replace('http://', 'https://')
   if (pic.startsWith('//')) return `https:${pic}`
-  return `https:${pic}`
+  return ''
 }
 
 export async function searchVideo(keyword: string, page = 1, pageSize = 20): Promise<{ items: SearchItem[]; totalPages: number; totalResults: number }> {
@@ -60,8 +53,8 @@ export async function searchVideo(keyword: string, page = 1, pageSize = 20): Pro
     pic: normalizePic(item.pic),
   })
 
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { searchVideo: rendererSearch } = await import('@/services/bilibiliApi')
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { searchVideo: rendererSearch } = rendererApi
   const data = await rendererSearch(keyword, page, pageSize)
   const totalResults = data.numResults || 0
   return {
@@ -91,8 +84,8 @@ export interface VideoInfo {
 }
 
 export async function getVideoDetail(bvid: string): Promise<VideoInfo> {
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { getVideoDetail: rendererDetail } = await import('@/services/bilibiliApi')
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { getVideoDetail: rendererDetail } = rendererApi
   const data = await rendererDetail(bvid)
   return {
     bvid: data.bvid,
@@ -129,7 +122,7 @@ export async function getVideoComments(
   page = 1,
   pageSize = 20,
 ): Promise<{ items: VideoComment[]; total: number }> {
-  const { getVideoDetail: rendererDetail, getVideoComments: rendererComments } = await import('@/services/bilibiliApi')
+  const { getVideoDetail: rendererDetail, getVideoComments: rendererComments } = rendererApi
   let oid = 0
 
   if (target.bvid) {
@@ -171,8 +164,8 @@ export async function extractAudio(
   bvid: string,
   fallback?: { aid?: string | number; cid?: string | number },
 ): Promise<TrackSource> {
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { extractAudioFromVideo } = await import('@/services/bilibiliApi')
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { extractAudioFromVideo } = rendererApi
   return extractAudioFromVideo(bvid, fallback)
 }
 
@@ -189,8 +182,8 @@ export async function downloadAudio(audioUrl: string, filename: string): Promise
 // ===== 用户信息 =====
 
 export async function getUserInfo(): Promise<{ isLogin: boolean; mid: number; uname: string; face: string }> {
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { getNavInfo } = await import('@/services/bilibiliApi')
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { getNavInfo } = rendererApi
   const data = await getNavInfo()
   return {
     isLogin: data.isLogin,
@@ -202,7 +195,8 @@ export async function getUserInfo(): Promise<{ isLogin: boolean; mid: number; un
 
 // ===== 音乐排行榜 =====
 
-export async function getMusicRanking(): Promise<VideoInfo[]> {
+export type DiscoverSource = 'hot' | 'original' | 'latest'
+export async function getMusicRanking(options: { source?: DiscoverSource; page?: number; pageSize?: number } = {}): Promise<VideoInfo[]> {
   const parseItem = (v: any): VideoInfo => {
     const dur = typeof v.duration === 'string'
       ? v.duration.split(':').reduce((acc: number, t: string) => acc * 60 + parseInt(t), 0)
@@ -225,9 +219,9 @@ export async function getMusicRanking(): Promise<VideoInfo[]> {
     }
   }
 
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { getMusicRanking: rendererRanking } = await import('@/services/bilibiliApi')
-  const data = await rendererRanking()
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { getMusicRanking: rendererRanking } = rendererApi
+  const data = await rendererRanking(options)
   return (Array.isArray(data) ? data : (data as any).list || (data as any).data || []).map(parseItem)
 }
 
@@ -241,6 +235,7 @@ export interface MusicSong {
   artist: string
   coverUrl: string
   album: string
+  duration: number | string
   publishTime?: string
 }
 
@@ -261,21 +256,41 @@ function mapMusicSong(x: import('@/services/bilibiliApi').MusicCenterItem): Musi
     coverUrl: normalizePic(x.cover),
     album: x.album || '',
     publishTime: x.publish_time,
+    duration: parseDuration(x.duration, x.related_archive?.duration),
   }
+}
+
+const durationCache = new Map<string, number>()
+async function enrichSongDurations(songs: MusicSong[]): Promise<MusicSong[]> {
+  let cursor = 0
+  // Bound detail requests to avoid flooding the API when a chart omits durations.
+  await Promise.all(Array.from({ length: Math.min(4, songs.length) }, async () => {
+    while (cursor < songs.length) {
+      const song = songs[cursor++]
+      if (parseDuration(song.duration)) continue
+      if (durationCache.has(song.bvid)) { song.duration = durationCache.get(song.bvid)!; continue }
+      try {
+        const detail = await rendererApi.getVideoDetail(song.bvid)
+        song.duration = parseDuration(detail.duration, detail.pages?.find(p => String(p.cid) === song.cid)?.duration, detail.pages?.[0]?.duration)
+        if (song.duration) durationCache.set(song.bvid, Number(song.duration))
+      } catch { /* Unknown is displayed as --:--, never a fabricated song length. */ }
+    }
+  }))
+  return songs
 }
 
 // 综合热歌榜
 export async function getMusicCenterRank(ps = 30): Promise<MusicSong[]> {
-  const { getMusicComprehensiveRank } = await import('@/services/bilibiliApi')
+  const { getMusicComprehensiveRank } = rendererApi
   const list = await getMusicComprehensiveRank(ps)
-  return list.filter((x) => playableBvid(x)).map(mapMusicSong)
+  return enrichSongDurations(list.filter((x) => playableBvid(x)).map(mapMusicSong))
 }
 
 // 新歌速递
 export async function getNewSongs(): Promise<MusicSong[]> {
-  const { getNewMusic } = await import('@/services/bilibiliApi')
+  const { getNewMusic } = rendererApi
   const list = await getNewMusic()
-  return list.filter((x) => x.bvid).map(mapMusicSong)
+  return enrichSongDurations(list.filter((x) => x.bvid).map(mapMusicSong))
 }
 
 // ===== 搜索 UP主 =====
@@ -291,7 +306,7 @@ export interface UserResult {
 }
 
 export async function searchUsers(keyword: string, page = 1, pageSize = 20): Promise<{ items: UserResult[]; totalPages: number; totalResults: number }> {
-  const { searchUser } = await import('@/services/bilibiliApi')
+  const { searchUser } = rendererApi
   const data = await searchUser(keyword, page, pageSize)
   const items = (data.result || []).map((u) => ({
     mid: u.mid,
@@ -327,7 +342,7 @@ function parseLength(len: string): number {
 }
 
 export async function getUserVideos(mid: number, page = 1, pageSize = 30): Promise<{ items: UpVideo[]; total: number }> {
-  const { getUserVideos: rendererUserVideos } = await import('@/services/bilibiliApi')
+  const { getUserVideos: rendererUserVideos } = rendererApi
   const data = await rendererUserVideos(mid, page, pageSize)
   const items = (data.list?.vlist || []).map((v) => ({
     bvid: v.bvid,
@@ -365,7 +380,7 @@ export async function getRecommendVideos(ps = 20): Promise<VideoInfo[]> {
     return (data.item || []).map(parseItem)
   }
 
-  const { getRecommendedVideos: rendererRec } = await import('@/services/bilibiliApi')
+  const { getRecommendedVideos: rendererRec } = rendererApi
   const data = await rendererRec(ps)
   return (data.item || []).map(parseItem)
 }
@@ -373,8 +388,8 @@ export async function getRecommendVideos(ps = 20): Promise<VideoInfo[]> {
 // ===== 热门/推荐 =====
 
 export async function getPopularVideos(ps = 10, pn = 1): Promise<VideoInfo[]> {
-  // 统一走渲染进程浏览器 fetch：主进程 net.fetch 会被 B站反爬拦截（-352）
-  const { getPopularVideos: rendererPopular } = await import('@/services/bilibiliApi')
+  // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
+  const { getPopularVideos: rendererPopular } = rendererApi
   const data = await rendererPopular(ps, pn)
   return data.list?.map((v) => ({
     bvid: v.bvid,
@@ -385,7 +400,7 @@ export async function getPopularVideos(ps = 10, pn = 1): Promise<VideoInfo[]> {
     ownerName: v.owner?.name,
     ownerMid: v.owner?.mid,
     duration: v.duration,
-    cid: v.cid,
+    cid: v.cid || 0,
     stat: {
       view: v.stat?.view,
       like: v.stat?.like,
@@ -414,7 +429,7 @@ export async function generateQrCode(): Promise<QrCodeData> {
     return { url: data.url, qrcodeKey: data.qrcodeKey }
   }
 
-  const { generateQrCode: rendererGen } = await import('@/services/bilibiliApi')
+  const { generateQrCode: rendererGen } = rendererApi
   return rendererGen()
 }
 
@@ -423,19 +438,14 @@ export async function pollQrCode(qrcodeKey: string): Promise<QrPollResult> {
     return window.electronAPI.biliApi.qrPoll(qrcodeKey)
   }
 
-  const { pollQrCode: rendererPoll } = await import('@/services/bilibiliApi')
+  const { pollQrCode: rendererPoll } = rendererApi
   return rendererPoll(qrcodeKey)
 }
 
-export async function getLoginStatus(): Promise<{ isLoggedIn: boolean; sessdata?: string }> {
-  if (isElectron()) {
-    const cookies = await window.electronAPI.biliApi.getCookies()
-    return { isLoggedIn: cookies.isLoggedIn, sessdata: cookies.sessdata }
-  }
-
-  // 浏览器环境：通过 nav API 检测
+export async function getLoginStatus(): Promise<{ isLoggedIn: boolean; isLogin: boolean; uid: string; uname: string; face: string }> {
+  if (isElectron()) return window.electronAPI.biliApi.getLoginStatus()
   const info = await getUserInfo()
-  return { isLoggedIn: info.isLogin }
+  return { isLoggedIn: info.isLogin, isLogin: info.isLogin, uid: String(info.mid || ''), uname: info.uname, face: info.face }
 }
 
 export async function logout(): Promise<void> {

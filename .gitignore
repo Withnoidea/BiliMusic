@@ -35,3 +35,7 @@ platform/HarmonyOS/oh_modules
 /platform/HarmonyOS/web_engine/src/main/resources/rawfile
 /platform/HarmonyOS/web_engine/src/main/resources/resfile
 /platform/HarmonyOS/dependencies
+
+# Isolated Electron QA profiles (generated; never publish browser/session data)
+/artifacts/qa/profile-*/
+/artifacts/qa-packaged/profile-*/

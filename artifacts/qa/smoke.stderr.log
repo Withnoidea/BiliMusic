@@ -1,0 +1,5 @@
+Error occurred in handler for 'shell:open-path': Error: 无效的本地路径
+    at Se (file:///E:/document/project/BiliMusic/dist-electron/main.js:17:191)
+    at Re (file:///E:/document/project/BiliMusic/dist-electron/main.js:42:13)
+    at async file:///E:/document/project/BiliMusic/dist-electron/main.js:1482:64
+    at async Session.<anonymous> (node:electron/js2c/browser_init:2:106823)

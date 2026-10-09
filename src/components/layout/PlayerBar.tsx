@@ -1,3 +1,4 @@
+import { useCoverColor } from '@/hooks/useCoverColor'
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import {
@@ -42,14 +43,19 @@ export default function PlayerBar() {
   const { openAddToPlaylist } = useAddToPlaylist()
   const [queueOpen, setQueueOpen] = useState(false)
   const trackDuration = duration || player.currentTrack?.duration || 0
+  const ambient = useCoverColor(player.currentTrack?.coverUrl)
   const remaining = Math.max(trackDuration - progress, 0)
 
   return (
     <motion.div
+      className="player-bar"
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
       style={{
+        '--cover-color': ambient,
+        position: 'relative',
+        isolation: 'isolate',
         height: 82,
         width: '100%',
         background: 'var(--player-bg)',
@@ -70,6 +76,7 @@ export default function PlayerBar() {
       } as CSSProperties}
     >
       <div
+        className="player-bar__track"
         style={{
           width: 282,
           display: 'flex',
@@ -80,6 +87,7 @@ export default function PlayerBar() {
         }}
       >
         <motion.button
+          className="player-bar__metadata"
           type="button"
           onClick={() => { if (player.currentTrack) open() }}
           title={player.currentTrack ? '查看歌词' : undefined}
@@ -161,7 +169,8 @@ export default function PlayerBar() {
             )}
           </motion.div>
 
-          <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="player-bar__labels" style={{ minWidth: 0, flex: 1 }}>
+            {player.playbackSource === 'local' && <span className="local-audio-badge">本地播放</span>}
             {player.currentTrack ? (
               <>
                 <motion.div
@@ -247,6 +256,7 @@ export default function PlayerBar() {
       </div>
 
       <div
+        className="player-bar__transport"
         style={{
           flex: 1,
           maxWidth: 620,
@@ -330,6 +340,7 @@ export default function PlayerBar() {
       </div>
 
       <div
+        className="player-bar__tools"
         style={{
           width: 282,
           display: 'flex',
@@ -339,7 +350,7 @@ export default function PlayerBar() {
           flexShrink: 0,
         }}
       >
-        <IconButton ariaLabel="歌词麦克风">
+        <IconButton ariaLabel="查看歌词" onClick={open}>
           <Mic size={18} />
         </IconButton>
 
@@ -374,6 +385,7 @@ export default function PlayerBar() {
         </IconButton>
 
         <div
+          className="player-bar__volume"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -414,6 +426,7 @@ function PlayButton({ isPlaying, loading, onClick }: { isPlaying: boolean; loadi
     <motion.button
       type="button"
       onClick={onClick}
+      aria-label={loading ? '正在加载音频' : isPlaying ? '暂停' : '播放'}
       disabled={loading}
       whileHover={{ scale: loading ? 1 : 1.06, backgroundColor: 'var(--player-hover)' }}
       whileTap={{ scale: loading ? 1 : 0.94 }}

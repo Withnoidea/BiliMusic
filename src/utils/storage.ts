@@ -15,7 +15,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sidebarState: 'auto',
   playQuality: '高品质',
   downloadQuality: '高品质',
-  downloadDir: 'D:\\Music\\biliMusic',
+  downloadDir: '',
   autoPlay: true,
   showLyrics: true,
 }
@@ -75,6 +75,16 @@ export function toggleFavoriteTrack(track: Track): Track[] {
 export function removeFavoriteTrack(id: string): Track[] {
   const favs = loadFavoriteTracks().filter(t => t.id !== id)
   addTombstone(FAVORITE_TOMBSTONES_KEY, id)
+  saveFavoriteTracks(favs)
+  return favs
+}
+
+export function removeMultipleFavoriteTracks(ids: string[]): Track[] {
+  const idSet = new Set(ids)
+  const favs = loadFavoriteTracks().filter(t => !idSet.has(t.id))
+  for (const id of ids) {
+    addTombstone(FAVORITE_TOMBSTONES_KEY, id)
+  }
   saveFavoriteTracks(favs)
   return favs
 }

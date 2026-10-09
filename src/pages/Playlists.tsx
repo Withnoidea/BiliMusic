@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { CheckSquare, ListMusic, Music, Play, Square, Trash2, X } from 'lucide-react'
+import { Check, CheckSquare, Download, ListMusic, Loader2, Music, Play, RotateCw, Square, Trash2, X } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
+import { downloadTracks, downloadSingleTrack, isTrackDownloaded } from '@/services/downloadManager'
+import { useImport } from '@/contexts/ImportContext'
 import AddToPlaylistButton from '@/components/AddToPlaylistButton'
 import {
   EmptyLibrary,
@@ -18,7 +20,7 @@ import {
   PLAYLISTS_CHANGED_EVENT,
   removeTracksFromPlaylist,
 } from '@/utils/storage'
-import type { Playlist } from '@/types'
+import type { Playlist, Track } from '@/types'
 
 export default function Playlists() {
   const { playlistId } = useParams()
@@ -84,9 +86,59 @@ function PlaylistCard({ playlist }: { playlist: Playlist }) {
 function PlaylistDetail({ playlistId }: { playlistId: string }) {
   const [playlist, setPlaylist] = useState<Playlist | null>(() => getPlaylist(playlistId))
   const [editing, setEditing] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [downloadAllBusy, setDownloadAllBusy] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState<string>('')
+  const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set())
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const player = usePlayer()
+  const { showToast } = player
   const navigate = useNavigate()
+  const { records, resumePlaylist } = useImport()
+
+  const tracks = playlist?.tracks || []
+
+  const refreshDownloaded = useCallback(() => {
+    const set = new Set<string>()
+    for (const t of tracks) {
+      if (isTrackDownloaded(t.id)) set.add(t.id)
+    }
+    setDownloadedIds(set)
+  }, [tracks])
+
+  useEffect(() => {
+    refreshDownloaded()
+    window.addEventListener('bilimusic_downloads_changed', refreshDownloaded)
+    return () => window.removeEventListener('bilimusic_downloads_changed', refreshDownloaded)
+  }, [refreshDownloaded])
+
+  const handleDownloadTrack = async (track: Track) => {
+    if (downloadingId || downloadAllBusy) return
+    setDownloadingId(track.id)
+    try {
+      showToast(`开始下载《${track.title}》`)
+      await downloadSingleTrack(track)
+      showToast(`《${track.title}》下载完成`)
+      refreshDownloaded()
+    } catch (err: any) {
+      showToast(`下载失败: ${err?.message || '未知错误'}`)
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
+  const handleDownloadTracks = async (targetTracks: Track[]) => {
+    if (downloadAllBusy || targetTracks.length === 0) return
+    setDownloadAllBusy(true)
+    const { successCount, failCount } = await downloadTracks(targetTracks, (done, total) => {
+      setDownloadProgress(`(${done}/${total})`)
+      refreshDownloaded()
+    })
+
+    setDownloadAllBusy(false)
+    setDownloadProgress('')
+    showToast(`批量下载完成：成功 ${successCount} 首${failCount > 0 ? `，失败 ${failCount} 首` : ''}`)
+  }
 
   useEffect(() => {
     const sync = () => setPlaylist(getPlaylist(playlistId))
@@ -99,12 +151,20 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
     }
   }, [playlistId])
 
-  const tracks = playlist?.tracks || []
   const heroImage = playlist?.coverUrl || tracks[0]?.coverUrl
   const updatedText = useMemo(() => {
     if (!playlist?.updatedAt) return ''
     return new Date(playlist.updatedAt).toLocaleDateString()
   }, [playlist?.updatedAt])
+
+  // 该歌单是否有未完成的导入（未处理/失败/待确认/未找到 = 尚无已选结果），供右上角"继续导入"
+  const importRecord = records[playlistId]
+  const incompleteCount = importRecord
+    ? importRecord.results.reduce((n, r, i) => {
+        if (!r || r.error) return n + 1
+        return (importRecord.selected[i] ?? r.bestMatch?.bvid) ? n : n + 1
+      }, 0)
+    : 0
 
   if (!playlist) {
     return (
@@ -168,11 +228,31 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
         tone="purple"
         action={(
           <>
-            {tracks.length > 0 && (
-              <button className="am-action am-action--primary" onClick={() => player.playAll(tracks)}>
-                <Play size={17} fill="currentColor" />
-                播放全部
+            {incompleteCount > 0 && (
+              <button
+                className="am-action am-action--subtle"
+                onClick={() => { resumePlaylist(playlistId); navigate('/import') }}
+                title={`该歌单还有 ${incompleteCount} 首未完成匹配，点击继续导入`}
+              >
+                <RotateCw size={16} />
+                继续导入 {incompleteCount} 首
               </button>
+            )}
+            {tracks.length > 0 && (
+              <>
+                <button className="am-action am-action--primary" onClick={() => player.playAll(tracks)}>
+                  <Play size={17} fill="currentColor" />
+                  播放全部
+                </button>
+                <button
+                  className="am-action am-action--subtle"
+                  onClick={() => handleDownloadTracks(tracks)}
+                  disabled={downloadAllBusy}
+                >
+                  {downloadAllBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  {downloadAllBusy ? `正在下载 ${downloadProgress}` : '下载全部'}
+                </button>
+              </>
             )}
             <button className="am-action am-action--subtle" onClick={handleDelete}>
               <Trash2 size={16} />
@@ -197,10 +277,23 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
               </button>
             )}
             {editing && selectedIds.size > 0 && (
-              <button type="button" className="playlist-editbar__danger" onClick={removeSelected}>
-                <Trash2 size={16} />
-                移出歌单
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedList = tracks.filter(t => selectedIds.has(t.id))
+                    handleDownloadTracks(selectedList)
+                  }}
+                  disabled={downloadAllBusy}
+                >
+                  {downloadAllBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  {downloadAllBusy ? `下载中 ${downloadProgress}` : `下载 (${selectedIds.size})`}
+                </button>
+                <button type="button" className="playlist-editbar__danger" onClick={removeSelected}>
+                  <Trash2 size={16} />
+                  移出歌单
+                </button>
+              </>
             )}
             <button type="button" className="playlist-editbar__primary" onClick={toggleEditing}>
               {editing ? '完成' : '选择'}
@@ -214,7 +307,7 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
                 index={index + 1}
                 isCurrent={player.currentTrack?.id === track.id}
                 isPlaying={player.isPlaying}
-                onPlay={() => editing ? toggleSelected(track.id) : player.playNow(track)}
+                onPlay={() => editing ? toggleSelected(track.id) : player.playFromList(track, playlist.tracks)}
                 leading={editing ? (
                   <button
                     type="button"
@@ -227,6 +320,25 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
                 ) : undefined}
                 extra={(
                   <div className="am-extra-actions">
+                    <button
+                      className="am-icon-button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (!downloadedIds.has(track.id)) {
+                          handleDownloadTrack(track)
+                        }
+                      }}
+                      disabled={downloadingId === track.id || downloadedIds.has(track.id)}
+                      title={downloadedIds.has(track.id) ? '已下载到本地' : '下载到本地'}
+                    >
+                      {downloadingId === track.id ? (
+                        <Loader2 size={15} className="animate-spin text-accent" />
+                      ) : downloadedIds.has(track.id) ? (
+                        <Check size={15} />
+                      ) : (
+                        <Download size={15} />
+                      )}
+                    </button>
                     <AddToPlaylistButton track={track} size={15} />
                     {!editing && (
                       <button className="am-icon-danger" onClick={(e) => { e.stopPropagation(); removeOne(track.id) }} title="移出歌单">

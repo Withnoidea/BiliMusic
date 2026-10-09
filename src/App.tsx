@@ -1,20 +1,23 @@
-import { useEffect } from 'react'
+import { lazy, useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { useAutoSync } from '@/hooks/useAutoSync'
+import { useDesktopLyricsBridge } from '@/hooks/useDesktopLyrics'
 import { PlayerProvider } from '@/contexts/PlayerContext'
 import { NowPlayingProvider } from '@/contexts/NowPlayingContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { AddToPlaylistProvider } from '@/contexts/AddToPlaylistContext'
+import { ImportProvider } from '@/contexts/ImportContext'
 import LoginDialog from '@/components/LoginDialog'
 import MainLayout from '@/components/layout/MainLayout'
-import Discover from '@/pages/Discover'
-import SearchPage from '@/pages/Search'
-import Recommend from '@/pages/Recommend'
-import Recent from '@/pages/Recent'
-import Favorites from '@/pages/Favorites'
-import Playlists from '@/pages/Playlists'
-import Downloads from '@/pages/Downloads'
-import Settings from '@/pages/Settings'
+const Discover = lazy(() => import('@/pages/Discover'))
+const SearchPage = lazy(() => import('@/pages/Search'))
+const Recommend = lazy(() => import('@/pages/Recommend'))
+const Recent = lazy(() => import('@/pages/Recent'))
+const Favorites = lazy(() => import('@/pages/Favorites'))
+const Playlists = lazy(() => import('@/pages/Playlists'))
+const Downloads = lazy(() => import('@/pages/Downloads'))
+const Settings = lazy(() => import('@/pages/Settings'))
+const Import = lazy(() => import('@/pages/Import'))
 
 function GlobalLoginDialog() {
   const { showLogin, setShowLogin, checkLogin } = useAuth()
@@ -28,6 +31,11 @@ function GlobalLoginDialog() {
       }}
     />
   )
+}
+
+function DesktopLyricsBridge() {
+  useDesktopLyricsBridge()
+  return null
 }
 
 export default function App() {
@@ -44,21 +52,25 @@ export default function App() {
       <PlayerProvider>
         <NowPlayingProvider>
           <AddToPlaylistProvider>
-            <Routes>
-              <Route element={<MainLayout />}>
-                <Route path="/" element={<Discover />} />
-                <Route path="/discover" element={<Discover />} />
-                <Route path="/search" element={<SearchPage />} />
-                <Route path="/recommend" element={<Recommend />} />
-                <Route path="/recent" element={<Recent />} />
-                <Route path="/favorites" element={<Favorites />} />
-                <Route path="/playlists" element={<Playlists />} />
-                <Route path="/playlists/:playlistId" element={<Playlists />} />
-                <Route path="/downloads" element={<Downloads />} />
-                <Route path="/settings" element={<Settings />} />
-              </Route>
-            </Routes>
-            <GlobalLoginDialog />
+            <ImportProvider>
+              <DesktopLyricsBridge />
+              <Routes>
+                <Route element={<MainLayout />}>
+                  <Route path="/" element={<Discover />} />
+                  <Route path="/discover" element={<Discover />} />
+                  <Route path="/search" element={<SearchPage />} />
+                  <Route path="/recommend" element={<Recommend />} />
+                  <Route path="/recent" element={<Recent />} />
+                  <Route path="/favorites" element={<Favorites />} />
+                  <Route path="/playlists" element={<Playlists />} />
+                  <Route path="/playlists/:playlistId" element={<Playlists />} />
+                  <Route path="/import" element={<Import />} />
+                  <Route path="/downloads" element={<Downloads />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Route>
+              </Routes>
+              <GlobalLoginDialog />
+            </ImportProvider>
           </AddToPlaylistProvider>
         </NowPlayingProvider>
       </PlayerProvider>

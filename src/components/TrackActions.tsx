@@ -1,4 +1,5 @@
-import { ListStart, Plus, Check } from 'lucide-react'
+import { downloadSingleTrack, friendlyDownloadError } from '@/services/downloadManager'
+import { ListStart, Plus, Check, Download } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
 import AddToPlaylistButton from '@/components/AddToPlaylistButton'
 import type { Track } from '@/types'
@@ -29,6 +30,10 @@ export default function TrackActions({ track, size = 16 }: { track: Track; size?
         icon={queued ? <Check size={size} /> : <Plus size={size} />}
         color={queued ? 'var(--color-muted)' : undefined}
       />
+      <ActionButton title="下载音轨" onClick={() => {
+        player.showToast('已加入下载队列，可在下载中心查看进度')
+        void downloadSingleTrack(track).catch(error => player.showToast(friendlyDownloadError(error)))
+      }} icon={<Download size={size} />} />
       <AddToPlaylistButton track={track} size={size} />
     </div>
   )
@@ -44,6 +49,7 @@ function ActionButton({ title, onClick, icon, color }: {
     <button
       onClick={onClick}
       title={title}
+      aria-label={title}
       className="track-action-button"
       style={{ color: color || undefined }}
     >

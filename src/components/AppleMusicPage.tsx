@@ -72,12 +72,13 @@ export function ActionButton({
   )
 }
 
-export function MusicSection({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
+export function MusicSection({ title, icon, children, action }: { title: string; icon?: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <section className="am-section">
       <div className="am-section__head">
         {icon && <span>{icon}</span>}
         <h2>{title}</h2>
+        {action && <div style={{ marginLeft: 'auto' }}>{action}</div>}
       </div>
       {children}
     </section>
@@ -221,7 +222,7 @@ function Equalizer() {
 }
 
 export function formatDuration(seconds: number): string {
-  if (!seconds) return '0:00'
+  if (!Number.isFinite(seconds) || seconds <= 0) return '--:--'
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, '0')}`

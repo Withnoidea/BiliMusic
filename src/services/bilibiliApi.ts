@@ -5,6 +5,13 @@
  */
 
 const BILI_API = 'https://api.bilibili.com'
+async function biliRequest(input: string, init?: RequestInit): Promise<Pick<Response, 'json'>> {
+  if (window.electronAPI?.biliApi && input.startsWith(BILI_API + '/')) {
+    const data = await window.electronAPI.biliApi.request(input.slice(BILI_API.length))
+    return { json: async () => data }
+  }
+  return fetch(input, { ...init, credentials: 'omit' })
+}
 
 // B站图片地址统一转 https：http:// 的 hdslb 图在渲染进程会加载失败
 // （大量 https 连接建立后同主机 cleartext 请求冲突），// 协议相对地址同样补全
@@ -27,7 +34,7 @@ async function biliFetch<T>(path: string, options: BiliFetchOptions = {}): Promi
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
   }
 
-  const resp = await fetch(url.toString(), {
+  const resp = await biliRequest(url.toString(), {
     credentials,
     headers: {
       Referer: 'https://www.bilibili.com',
@@ -41,7 +48,7 @@ async function biliFetch<T>(path: string, options: BiliFetchOptions = {}): Promi
   return data.data as T
 }
 
-class BiliApiError extends Error {
+export class BiliApiError extends Error {
   code: number
   path: string
   constructor(code: number, message: string, path: string) {
@@ -136,7 +143,7 @@ async function getWbiKeys(): Promise<{ imgKey: string; subKey: string }> {
     return { imgKey: wbiKeysCache.imgKey, subKey: wbiKeysCache.subKey }
   }
   // 不能用 biliFetch：未登录时 nav 返回 code -101 会抛错，但 wbi_img 仍有效
-  const resp = await fetch(`${BILI_API}/x/web-interface/nav`, {
+  const resp = await biliRequest(`${BILI_API}/x/web-interface/nav`, {
     credentials: 'include',
     headers: { Referer: 'https://www.bilibili.com' },
   })
@@ -213,7 +220,7 @@ export async function searchVideo(
     page,
     page_size: pageSize,
   })
-  const resp = await fetch(`${BILI_API}/x/web-interface/wbi/search/type?${query}`, {
+  const resp = await biliRequest(`${BILI_API}/x/web-interface/wbi/search/type?${query}`, {
     credentials: 'include',
     headers: { Referer: 'https://www.bilibili.com' },
   })
@@ -257,7 +264,7 @@ export async function searchUser(
     page,
     page_size: pageSize,
   })
-  const resp = await fetch(`${BILI_API}/x/web-interface/wbi/search/type?${query}`, {
+  const resp = await biliRequest(`${BILI_API}/x/web-interface/wbi/search/type?${query}`, {
     credentials: 'include',
     headers: { Referer: 'https://www.bilibili.com' },
   })
@@ -296,7 +303,7 @@ export async function getUserVideos(
   order: 'pubdate' | 'click' = 'pubdate',
 ): Promise<SpaceArcSearchData> {
   const query = await encodeWbi({ mid, pn: page, ps: pageSize, order, platform: 'web' })
-  const resp = await fetch(`${BILI_API}/x/space/wbi/arc/search?${query}`, {
+  const resp = await biliRequest(`${BILI_API}/x/space/wbi/arc/search?${query}`, {
     credentials: 'include',
     headers: { Referer: `https://space.bilibili.com/${mid}/video` },
   })
@@ -482,6 +489,7 @@ export interface PopularVideo {
   owner: VideoOwner
   stat: VideoStat
   duration: number
+  cid?: number
 }
 
 export async function getPopularVideos(ps = 10, pn = 1): Promise<{ list: PopularVideo[] }> {
@@ -506,8 +514,19 @@ export interface MusicRankingItem {
   pubdate: number
 }
 
-export async function getMusicRanking(): Promise<MusicRankingItem[]> {
-  return biliFetch<MusicRankingItem[]>('/x/web-interface/ranking/region', { params: { rid: 3, day: 3 } })
+export async function getMusicRanking(options: { source?: 'hot' | 'original' | 'latest'; page?: number; pageSize?: number } = {}): Promise<MusicRankingItem[]> {
+  const page = Math.max(1, Math.floor(options.page || 1))
+  const size = Math.min(50, Math.max(1, Math.floor(options.pageSize || 20)))
+  if (options.source === 'latest') {
+    const data = await biliFetch<{ archives: MusicRankingItem[] }>('/x/web-interface/newlist', { params: { rid: 3, pn: page, ps: size } })
+    return data.archives || []
+  }
+  const data = await biliFetch<MusicRankingItem[] | { list: MusicRankingItem[] }>('/x/web-interface/ranking/region', {
+    params: { rid: options.source === 'original' ? 28 : 3, day: 3, original: options.source === 'original' ? 1 : 0 },
+  })
+  const list = Array.isArray(data) ? data : data.list || []
+  const start = list.length ? ((page - 1) * size) % list.length : 0
+  return list.slice(start, start + size)
 }
 
 // ===== 音乐中心 (music.bilibili.com/pc/music-center 同源数据) =====
@@ -519,12 +538,13 @@ export interface MusicCenterRelatedArchive {
   cid: string
   cover: string
   title: string
-  duration?: number
+  duration?: number | string
 }
 
 // 音乐中心曲目（综合榜 / 新歌）
 // 新歌：顶层 bvid 即可播放稿件；综合榜：需取 related_archive.bvid
 export interface MusicCenterItem {
+  duration?: number | string
   music_id: string
   music_title: string
   author: string
@@ -685,7 +705,8 @@ export interface QrPollResult {
  * 生成扫码登录二维码
  */
 export async function generateQrCode(): Promise<QrCodeData> {
-  const resp = await fetch(`${BILI_API.replace('api', 'passport')}/x/passport-login/web/qrcode/generate`, {
+  if (window.electronAPI?.biliApi) return window.electronAPI.biliApi.qrGenerate()
+  const resp = await biliRequest(`${BILI_API.replace('api', 'passport')}/x/passport-login/web/qrcode/generate`, {
     credentials: 'include',
     headers: { Referer: 'https://passport.bilibili.com/login' },
   })
@@ -708,7 +729,8 @@ export async function generateQrCode(): Promise<QrCodeData> {
  * 0     = 登录成功
  */
 export async function pollQrCode(qrcodeKey: string): Promise<QrPollResult> {
-  const resp = await fetch(
+  if (window.electronAPI?.biliApi) return window.electronAPI.biliApi.qrPoll(qrcodeKey)
+  const resp = await biliRequest(
     `${BILI_API.replace('api', 'passport')}/x/passport-login/web/qrcode/poll?qrcode_key=${qrcodeKey}`,
     {
       credentials: 'include',

@@ -1,3 +1,4 @@
+import { useCoverColor } from '@/hooks/useCoverColor'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
@@ -31,6 +32,7 @@ export default function NowPlaying() {
   const { expanded, close } = useNowPlaying()
   const { settings } = useAppSettings()
   const track = player.currentTrack
+  const ambient = useCoverColor(track?.coverUrl)
   const lyrics = useLyrics(track, expanded && settings.showLyrics)
   const duration = liveDuration || track?.duration || 0
   const [fullscreen, setFullscreen] = useState(false)
@@ -160,6 +162,7 @@ export default function NowPlaying() {
       {expanded && track && (
         <motion.div
           key="now-playing"
+          style={{ '--cover-color': ambient } as React.CSSProperties}
           className={`now-playing ${fullscreen ? 'is-fullscreen' : ''} ${fullscreen && !controlsVisible ? 'is-immersive-idle' : ''}`}
           initial={{ opacity: 0, scale: 1.015 }}
           animate={{ opacity: 1, scale: 1 }}

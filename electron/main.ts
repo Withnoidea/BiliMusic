@@ -1,26 +1,68 @@
-import { app, BrowserWindow, Tray, ipcMain, nativeImage, net, protocol, screen, session, shell } from 'electron'
+import { clampLyricBounds } from './lyricGeometry'
+import { app, BrowserWindow, Tray, ipcMain, nativeImage, net, protocol, screen, session, shell, dialog, globalShortcut } from 'electron'
+import { createHash } from 'node:crypto'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { registerBiliApiHandlers } from './biliApi'
+import { registerBiliApiHandlers, initializeBiliAuth } from './biliApi'
 import { registerLyricsApiHandlers } from './lyricsApi'
 import { initUpdates, getActiveRendererRoot } from './updater'
 import { registerWebdavHandlers } from './webdav'
+import { registerPlaylistImportHandlers } from './playlistImportApi'
+
+import { assertTrustedSender, grantDirectory, downloadDirectory, validateAbsolutePath, isWithin } from './security'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const isHarmonyOS = (process.platform as string) === 'openharmony'
 
+// 单实例锁：防止多开多个 exe 进程
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  console.log('[BiliMusic] 检测到已有实例正在运行，自动退出当前进程')
+  app.quit()
+  process.exit(0)
+}
+
+
+// 统一 userData 目录：dev（应用名 bilimusic）与打包版（productName BiliMusic）默认各用一套
+// userData，导致歌单/收藏/登录态（localStorage + Cookie）在两套存储间互相看不见——
+// 例如 dev 里导入的歌单，打包版里"消失"。统一到固定目录即可跨构建共享；
+// 同时把旧打包版目录（BiliMusic）的数据一次性迁移过来，避免已有数据丢失。
+if (!isHarmonyOS) {
+  const userDataDir = path.join(app.getPath('appData'), 'bilimusic')
+  app.setPath('userData', userDataDir)
+  const legacyDir = path.join(app.getPath('appData'), 'BiliMusic')
+  try {
+    if (!fs.existsSync(userDataDir) && fs.existsSync(legacyDir)) {
+      fs.cpSync(legacyDir, userDataDir, { recursive: true })
+      console.log('[BiliMusic] 已迁移旧目录数据:', legacyDir, '→', userDataDir)
+    }
+  } catch {
+    // 迁移失败不阻塞启动（首次无旧数据时正常跳过）
+  }
+}
+
 // 生产环境用自定义 app:// 协议加载渲染层：file:// 下 ESM(type=module) 脚本会被
 // Chromium 的 CORS 策略拦截（file:// 为不透明源）导致页面空白。自定义标准安全协议
 // 提供合法 origin，模块脚本与相对资源即可正常加载。须在 app ready 之前注册。
 protocol.registerSchemesAsPrivileged([
+  { scheme: 'bilimusic-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
 // Chrome MCP 远程调试（开发时使用）
-app.commandLine.appendSwitch('remote-debugging-port', '17689')
-app.commandLine.appendSwitch('remote-allow-origins', '*')
+const debugEnabled = process.env.NODE_ENV === 'development' || process.argv.includes('--debug')
+if (debugEnabled) {
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+  app.commandLine.appendSwitch('remote-debugging-port', '17689')
+  app.commandLine.appendSwitch('remote-allow-origins', 'http://localhost:17689,http://127.0.0.1:17689')
+} else {
+  app.commandLine.removeSwitch('remote-debugging-port')
+  app.commandLine.removeSwitch('remote-debugging-pipe')
+  app.commandLine.removeSwitch('remote-allow-origins')
+}
+app.on('will-quit', () => globalShortcut.unregisterAll())
 
 // B站请求头处理
 //
@@ -38,45 +80,14 @@ function setupBiliHeaders() {
     'https://*.bilibili.com/*',
   ]
 
-  // 记录每个 API 请求的渲染进程真实 Origin，供 onHeadersReceived 回显。
-  // credentials:'include' 模式下浏览器要求 ACAO 必须是具体 origin，不能为 '*'，
-  // 否则跨域响应被拦（dev 的 http://localhost:5173 会触发，file:// 不会）。
-  const reqOrigin = new Map<number, string>()
-
-  // 请求发出前：注入 Referer + Origin（改写到 bilibili.com 绕过反爬）。
-  // 音频/图片 CDN（bilivideo/hdslb）缺少 Referer 会返回 403。
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: biliUrls }, (details, callback) => {
     const headers = details.requestHeaders
-    const origin = headers['Origin'] || headers['origin']
-    // 仅记录 API/passport 请求的真实 origin（这些请求才有对应的 onHeadersReceived 消费并清理）
-    if (origin && /^(https?|app):\/\//.test(origin) && /\/\/(api|passport)\.bilibili\.com/.test(details.url)) {
-      reqOrigin.set(details.id, origin)
-    }
-    headers['Referer'] = 'https://www.bilibili.com'
-    headers['Origin'] = 'https://www.bilibili.com'
+    delete headers.Cookie
+    delete headers.cookie
+    headers.Referer = 'https://www.bilibili.com'
     callback({ requestHeaders: headers })
   })
 
-  // API/passport 响应：写入 CORS 头，让渲染进程的浏览器 fetch 可跨域读取
-  const apiUrls = { urls: ['https://api.bilibili.com/*', 'https://passport.bilibili.com/*'] }
-  session.defaultSession.webRequest.onHeadersReceived(apiUrls, (details, callback) => {
-    const respHeaders: Record<string, string[]> = {}
-    if (details.responseHeaders) {
-      for (const [key, value] of Object.entries(details.responseHeaders)) {
-        if (!key.toLowerCase().startsWith('access-control-allow')) {
-          respHeaders[key] = value as string[]
-        }
-      }
-    }
-    const origin = reqOrigin.get(details.id)
-    reqOrigin.delete(details.id)
-    // 回显渲染进程真实 origin（带 credentials 时不能用 '*'）；取不到时退回 '*'（file:// 场景）
-    respHeaders['access-control-allow-origin'] = [origin || '*']
-    respHeaders['access-control-allow-credentials'] = ['true']
-    respHeaders['access-control-allow-methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
-    respHeaders['access-control-allow-headers'] = ['*']
-    callback({ responseHeaders: respHeaders })
-  })
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -85,6 +96,8 @@ let trayWindow: BrowserWindow | null = null
 let trayWindowReady = false
 let pendingTrayShow: { x: number; y: number } | null = null
 let isQuitting = false
+let lyricWindow: BrowserWindow | null = null
+let lyricLocked = true // 锁定 = 鼠标穿透，只能从设置里解锁拖动
 
 type TrayCommand = 'toggle-play' | 'next' | 'prev' | 'show-window' | 'quit'
 
@@ -342,7 +355,7 @@ function getTrayHtml() {
     </div>
   </div>
   <script>
-    const { ipcRenderer } = require('electron')
+    const ipcRenderer = window.auxiliaryIPC
     const $ = (id) => document.getElementById(id)
     let state = { hasTrack: false, title: '未在播放', artist: '搜索并播放音乐', coverUrl: '', isPlaying: false, queueLength: 0, theme: 'dark' }
     function render(next) {
@@ -377,6 +390,13 @@ function getTrayHtml() {
 </html>`
 }
 
+// Static auxiliary pages run only their exact inline script, with a narrow isolated bridge.
+function secureAuxiliaryHtml(html: string): string {
+  const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'").join(' ')
+  return html.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${hashes}; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'">`)
+}
+
 function createTrayWindow() {
   if (isHarmonyOS) return null
   if (trayWindow) return trayWindow
@@ -394,11 +414,15 @@ function createTrayWindow() {
     opacity: 0,
     paintWhenInitiallyHidden: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      preload: path.join(__dirname, process.env.VITE_DEV_SERVER_URL ? '../electron/auxiliary-preload.cjs' : 'auxiliary-preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
     },
   })
-  trayWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(getTrayHtml())}`)
+  trayWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  trayWindow.webContents.on('will-navigate', event => event.preventDefault())
+  trayWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(secureAuxiliaryHtml(getTrayHtml()))}`)
   trayWindow.once('ready-to-show', () => {
     trayWindowReady = true
     if (pendingTrayShow) {
@@ -477,6 +501,387 @@ function hideToTray() {
   if (process.platform === 'darwin') app.dock?.hide()
 }
 
+// ===== 桌面歌词窗口 =====
+//
+// 独立透明置顶窗口，渲染当前/下一行歌词。锁定时 setIgnoreMouseEvents(true)
+// 鼠标穿透（不挡桌面操作），解锁后可拖动/点击。样式由渲染进程通过 IPC 推送。
+
+export interface DesktopLyricState {
+  visible: boolean
+  line: string
+  nextLine: string
+  isPlaying: boolean
+  hasTrack: boolean
+  locked: boolean
+  style: Record<string, string | number | boolean>
+}
+
+let lyricState: DesktopLyricState = {
+  visible: false,
+  line: '',
+  nextLine: '',
+  isPlaying: false,
+  hasTrack: false,
+  locked: true,
+  style: {},
+}
+
+function getLyricHtml() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    html, body { background: transparent; overflow: hidden; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    #root {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+    }
+    /* 拖动条与歌词同在一个 flex 流里，间距恒定 —— 与窗口高度无关，
+       避免过去"badge 钉顶部 + 歌词居中"导致间距随窗口高度变化。 */
+    .stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      position: relative;
+      width: 100%;
+      max-width: 100%;
+      padding: 4px;
+      touch-action: none;
+      min-width: 0;
+    }
+    #dragBar {
+      position: absolute; top: 4px; right: 8px; z-index: 2;
+      padding: 3px 8px; border-radius: 8px;
+      background: rgba(0,0,0,.6); color: rgba(255,255,255,.8);
+      font-size: 10px; pointer-events: none;
+      opacity: 0; transition: opacity .15s;
+    }
+    body.unlocked.hint #dragBar { opacity: 1; }
+    body.unlocked #root { cursor: grab; touch-action: none; }
+    body.dragging #root { cursor: grabbing; }
+    body.dragging #dragBar { opacity: 0; }
+    .lyric-box {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .line { display: block; width: 100%; max-width: 100%; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 2px 12px rgba(0,0,0,.65); }
+    .line.preview { opacity: .65; }
+    .line.next { opacity: .55; font-size: .72em; margin-top: 2px; }
+    body.unlocked .lyric-box {
+      outline: 1px dashed rgba(255, 255, 255, .4);
+      outline-offset: -1px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="stack">
+      <div id="dragBar">按住歌词拖动 · 在设置中锁定</div>
+      <div class="lyric-box">
+        <span class="line current" id="line"></span>
+        <span class="line next" id="nextLine"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+    const ipcRenderer = window.auxiliaryIPC
+    const lineEl = document.getElementById('line')
+    const nextEl = document.getElementById('nextLine')
+    const dragTarget = document.getElementById('root')
+
+    let style = {}
+    let dragging = false
+    let pointerId = -1
+    let heartbeat = null
+    let hintTimer = null
+
+    function applyStyle(s) {
+      style = s || {}
+      const box = document.querySelector('.lyric-box')
+      const line = lineEl
+      box.style.fontSize = Math.min(72, Math.max(16, Number(style.fontSize) || 28)) + 'px'
+      line.style.fontWeight = style.bold ? '800' : '600'
+      box.style.color = style.color || '#ff375f'
+      if (style.outline) {
+        const ow = style.outlineWidth || 2
+        const oc = style.outlineColor || 'rgba(0,0,0,.85)'
+        line.style.textShadow = [0,1,2,3,4,5,6,7,8].flatMap(dx =>
+          [0,1,2,3,4,5,6,7,8].map(dy =>
+            (dx*dx+dy*dy <= ow*ow && (dx||dy)) ? \`\${dx}px \${dy}px 0 \${oc}\` : []
+          )
+        ).filter(Boolean).join(',') + ', 0 2px 12px rgba(0,0,0,.4)'
+      } else {
+        line.style.textShadow = style.shadow === false ? 'none' : '0 2px 12px rgba(0,0,0,.5)'
+      }
+      if (style.showBg) {
+        box.style.background = style.bgColor || 'rgba(0,0,0,.35)'
+        box.style.padding = '8px 18px'
+        box.style.borderRadius = (style.bgRadius || 12) + 'px'
+      } else {
+        box.style.background = 'transparent'
+        box.style.padding = '0'
+        box.style.borderRadius = '0'
+      }
+    }
+
+    // Native cursor coordinates are sampled by the main process in DIP coordinates.
+    // Pointer capture + window-level release/cancel/blur cover releases outside the text.
+    function endDrag(notify = true) {
+      if (!dragging) return
+      dragging = false
+      clearInterval(heartbeat)
+      heartbeat = null
+      document.body.classList.remove('dragging')
+      try { if (pointerId >= 0) dragTarget.releasePointerCapture(pointerId) } catch (_) {}
+      pointerId = -1
+      if (notify) ipcRenderer.send('desktop-lyrics:drag:end')
+    }
+    dragTarget.addEventListener('pointerenter', () => {
+      document.body.classList.add('hint')
+      clearTimeout(hintTimer)
+      hintTimer = setTimeout(() => document.body.classList.remove('hint'), 1400)
+    })
+    dragTarget.addEventListener('pointerleave', () => document.body.classList.remove('hint'))
+    dragTarget.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || !document.body.classList.contains('unlocked')) return
+      endDrag()
+      dragging = true
+      pointerId = e.pointerId
+      document.body.classList.add('dragging')
+      try { dragTarget.setPointerCapture(pointerId) } catch (_) { endDrag(); return }
+      ipcRenderer.send('desktop-lyrics:drag:start')
+      heartbeat = setInterval(() => ipcRenderer.send('desktop-lyrics:drag:move'), 100)
+      e.preventDefault()
+    })
+    window.addEventListener('pointermove', (e) => {
+      if (!dragging) return
+      if (!(e.buttons & 1)) { endDrag(); return }
+      ipcRenderer.send('desktop-lyrics:drag:move')
+    }, true)
+    for (const name of ['pointerup', 'pointercancel', 'mouseup', 'blur', 'pagehide']) {
+      window.addEventListener(name, () => endDrag(), true)
+    }
+    window.addEventListener('mousemove', e => { if (dragging && !(e.buttons & 1)) endDrag() }, true)
+    dragTarget.addEventListener('lostpointercapture', () => endDrag())
+    document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag() })
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') endDrag() })
+    ipcRenderer.on('desktop-lyrics:drag:ended', () => endDrag(false))
+
+    ipcRenderer.on('desktop-lyrics:state', (_e, s) => {
+      if (!s) return
+      if (s.style) applyStyle(s.style)
+      const preview = !s.hasTrack || !s.line
+      lineEl.textContent = preview ? 'BiliMusic · 桌面歌词已就绪' : s.line
+      lineEl.classList.toggle('preview', preview)
+      nextEl.textContent = s.hasTrack ? s.nextLine || '' : ''
+      nextEl.style.display = s.hasTrack && s.nextLine ? 'block' : 'none'
+      if (s.locked || !s.visible) endDrag()
+      document.body.classList.toggle('unlocked', !s.locked)
+      document.body.classList.toggle('locked', Boolean(s.locked))
+    })
+
+    applyStyle({})
+    lineEl.textContent = 'BiliMusic · 桌面歌词已就绪'
+    lineEl.classList.add('preview')
+    nextEl.style.display = 'none'
+  </script>
+</body>
+</html>`
+}
+
+// 固定最大宽度，按字体和行数计算高度；短句切成长句时不会改变横向锚点。
+const LYRIC_W = 900
+const LYRIC_H = 140
+const LYRIC_BOUNDS_KEY = 'desktop_lyrics_position'
+
+function readLyricPosition(): { x: number; y: number } | null {
+  try {
+    const raw = readPersistentStore()[LYRIC_BOUNDS_KEY]
+    if (!raw) return null
+    const p = JSON.parse(raw)
+    if (Number.isFinite(p?.x) && Number.isFinite(p?.y)) return { x: p.x, y: p.y }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function saveLyricPosition() {
+  if (!lyricWindow || lyricWindow.isDestroyed()) return
+  const b = lyricWindow.getBounds()
+  const store = readPersistentStore()
+  store[LYRIC_BOUNDS_KEY] = JSON.stringify({ x: b.x, y: b.y })
+  writePersistentStore(store)
+}
+
+// Keep the complete fixed-width text area visible, including on small/negative-origin displays.
+function clampLyricPosition(x: number, y: number, display = screen.getDisplayNearestPoint({
+  x: Math.round(x + LYRIC_W / 2), y: Math.round(y + LYRIC_H / 2),
+})): Electron.Rectangle {
+  const font = Math.min(72, Math.max(16, Number(lyricState.style.fontSize) || 28))
+  const height = Math.min(display.workArea.height - 8, Math.ceil(font * 1.35 * (lyricState.nextLine ? 1.72 : 1) + (lyricState.style.showBg ? 18 : 2) + 8))
+  return clampLyricBounds(x, y, Math.min(LYRIC_W, display.workArea.width - 8), height, display.workArea)
+}
+
+function createLyricWindow() {
+  if (lyricWindow && !lyricWindow.isDestroyed()) return lyricWindow
+  lyricWindow = new BrowserWindow({
+    width: LYRIC_W,
+    height: LYRIC_H,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    paintWhenInitiallyHidden: true,
+    webPreferences: {
+      preload: path.join(__dirname, process.env.VITE_DEV_SERVER_URL ? '../electron/auxiliary-preload.cjs' : 'auxiliary-preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  })
+  lyricWindow.setAlwaysOnTop(true, 'screen-saver')
+  lyricWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  lyricWindow.webContents.on('will-navigate', event => event.preventDefault())
+  lyricWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(secureAuxiliaryHtml(getLyricHtml()))}`)
+  lyricWindow.once('ready-to-show', () => {
+    if (lyricState.visible) { showLyricWindow(); pushLyricState() }
+  })
+  lyricWindow.on('blur', endLyricDrag)
+  lyricWindow.on('hide', endLyricDrag)
+  lyricWindow.webContents.on('render-process-gone', endLyricDrag)
+  lyricWindow.on('closed', () => { endLyricDrag(); lyricWindow = null })
+  return lyricWindow
+}
+
+function applyLyricLock() {
+  if (!lyricWindow || lyricWindow.isDestroyed()) return
+  if (lyricState.locked) {
+    // 锁定 = 鼠标穿透，不挡桌面操作
+    lyricWindow.setIgnoreMouseEvents(true, { forward: true })
+  } else {
+    // 解锁 = 接收鼠标事件，由拖动条上的 pointer 事件驱动移动
+    lyricWindow.setIgnoreMouseEvents(false)
+  }
+}
+
+function showLyricWindow() {
+  const win = createLyricWindow()
+  if (!win.isVisible()) {
+    const saved = readLyricPosition()
+    const { workArea } = screen.getPrimaryDisplay()
+    const fallback = {
+      x: workArea.x + (workArea.width - LYRIC_W) / 2,
+      y: workArea.y + workArea.height - LYRIC_H - 120,
+    }
+    const target = clampLyricPosition(saved?.x ?? fallback.x, saved?.y ?? fallback.y)
+    // 完整约束尺寸与位置，小屏也不会越界
+    win.setBounds(target)
+    win.showInactive()
+  }
+  applyLyricLock()
+}
+
+function hideLyricWindow() {
+  lyricWindow?.hide()
+}
+
+function pushLyricState() {
+  if (!lyricWindow || lyricWindow.isDestroyed()) return
+  if (!lyricDragging) {
+    const bounds = lyricWindow.getBounds()
+    lyricWindow.setBounds(clampLyricPosition(bounds.x, bounds.y, screen.getDisplayMatching(bounds)))
+  }
+  lyricWindow.webContents.send('desktop-lyrics:state', lyricState)
+}
+
+// ===== Drag from an immutable native cursor/window origin, never accumulated deltas =====
+let lyricDragging = false
+let lyricDragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | null = null
+let lyricDragTimer: ReturnType<typeof setTimeout> | null = null
+
+function endLyricDrag() {
+  if (!lyricDragging) return
+  lyricDragging = false
+  lyricDragOrigin = null
+  if (lyricDragTimer) { clearTimeout(lyricDragTimer); lyricDragTimer = null }
+  if (lyricWindow && !lyricWindow.isDestroyed()) lyricWindow.webContents.send('desktop-lyrics:drag:ended')
+  saveLyricPosition()
+}
+function armLyricDragTimeout() {
+  if (lyricDragTimer) clearTimeout(lyricDragTimer)
+  // Heartbeats keep stationary holds alive, but a crashed/hidden renderer cannot leave a drag active.
+  lyricDragTimer = setTimeout(endLyricDrag, 1000)
+}
+ipcMain.on('desktop-lyrics:drag:start', event => {
+  if (!lyricWindow || lyricWindow.isDestroyed() || event.sender !== lyricWindow.webContents || lyricState.locked) return
+  lyricDragOrigin = { cursor: screen.getCursorScreenPoint(), bounds: lyricWindow.getBounds() }
+  lyricDragging = true
+  armLyricDragTimeout()
+})
+ipcMain.on('desktop-lyrics:drag:move', event => {
+  if (!lyricWindow || lyricWindow.isDestroyed() || event.sender !== lyricWindow.webContents) return
+  if (!lyricDragging || !lyricDragOrigin || lyricState.locked) return
+  const cursor = screen.getCursorScreenPoint()
+  const { bounds, cursor: start } = lyricDragOrigin
+  const next = clampLyricPosition(bounds.x + cursor.x - start.x, bounds.y + cursor.y - start.y, screen.getDisplayNearestPoint(cursor))
+  lyricWindow.setBounds(next)
+  armLyricDragTimeout()
+})
+ipcMain.on('desktop-lyrics:drag:end', event => {
+  if (event.sender === lyricWindow?.webContents) endLyricDrag()
+})
+
+// 桌面歌词 IPC
+ipcMain.on('desktop-lyrics:set-state', (_event, patch: Partial<DesktopLyricState>) => {
+  if (!patch || typeof patch !== 'object') return
+  const prevVisible = lyricState.visible
+  const prevLocked = lyricState.locked
+  lyricState = { ...lyricState, ...patch }
+  // 重新锁定或隐藏时，强制结束可能残留的拖动态
+  if ((lyricState.locked && !prevLocked) || !lyricState.visible) endLyricDrag()
+  if (lyricState.visible && !prevVisible) showLyricWindow()
+  if (!lyricState.visible && prevVisible) hideLyricWindow()
+  if (lyricState.visible) {
+    createLyricWindow() // 隐藏时窗口可能尚未创建，先确保存在
+    applyLyricLock()
+    pushLyricState()
+  }
+})
+
+ipcMain.on('desktop-lyrics:toggle-lock', () => {
+  lyricState.locked = !lyricState.locked
+  if (lyricState.locked) endLyricDrag()
+  applyLyricLock()
+  pushLyricState()
+})
+
+
 function sendTrayCommand(command: TrayCommand) {
   if (command === 'show-window') {
     showMainWindow()
@@ -498,7 +903,7 @@ function createWindow() {
     title: 'BiliMusic',
     width: 1280,
     height: 800,
-    minWidth: 1024,
+    minWidth: 680,
     minHeight: 640,
     frame: false,
     minimizable: true,
@@ -512,6 +917,8 @@ function createWindow() {
         ? path.join(__dirname, '../electron/preload.cjs')
         : path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
+      sandbox: true,
+      backgroundThrottling: false,
       nodeIntegration: false,
     },
   })
@@ -527,6 +934,12 @@ function createWindow() {
     if (isQuitting) return
     event.preventDefault()
     hideToTray()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const dev = process.env.VITE_DEV_SERVER_URL
+    if (!url.startsWith('app://local/') && !(dev && new URL(url).origin === new URL(dev).origin)) event.preventDefault()
   })
 
   mainWindow.on('closed', () => {
@@ -589,6 +1002,7 @@ ipcMain.on('tray:player-state', (_event, state: TrayPlayerState) => {
     coverUrl: String(state?.coverUrl || ''),
     isPlaying: Boolean(state?.isPlaying),
     queueLength: Number(state?.queueLength || 0),
+    theme: state?.theme === 'light' ? 'light' : 'dark',
   }
   updateTrayState()
 })
@@ -614,17 +1028,59 @@ ipcMain.on('persistent-storage:remove', (_event, key: string) => {
   writePersistentStore(store)
 })
 // 用系统默认浏览器打开外部链接（仅放行 http/https，避免任意协议执行）
+// 打开本地文件夹或文件
+ipcMain.handle('dialog:openDirectory', async (event) => {
+  assertTrustedSender(event)
+  if (!mainWindow) return null
+  const res = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择下载目录',
+  })
+  if (res.canceled || !res.filePaths.length) return null
+  return grantDirectory(res.filePaths[0])
+})
+
+ipcMain.handle('dialog:selectFolder', async (event, defaultPath?: string) => {
+  assertTrustedSender(event)
+  if (defaultPath) defaultPath = validateAbsolutePath(defaultPath)
+  if (!mainWindow) return null
+  const res = await dialog.showOpenDialog(mainWindow, {
+    defaultPath: typeof defaultPath === 'string' && defaultPath.trim() ? defaultPath : undefined,
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择下载目录',
+  })
+  if (res.canceled || !res.filePaths.length) return null
+  return grantDirectory(res.filePaths[0])
+})
+
+ipcMain.handle('shell:open-path', async (event, targetPath: string) => {
+  assertTrustedSender(event)
+  return shell.openPath(await downloadDirectory(targetPath))
+})
+
 ipcMain.handle('shell:open-external', (_event, url: string) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) return shell.openExternal(url)
 })
 
-app.whenReady().then(() => {
+app.on('second-instance', () => {
+  // 当第二个实例试图启动时，唤醒并聚焦到已有主窗口
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  }
+})
+
+app.whenReady().then(async () => {
+  await initializeBiliAuth()
   // 生产环境注册 app:// 协议，映射到打包后的 dist 目录（asar 内 file:// 读取透明支持）
   if (!process.env.VITE_DEV_SERVER_URL) {
     protocol.handle('app', async (request) => {
       const { pathname } = new URL(request.url)
       // 渲染层根目录可能是包内 dist 或已生效的 OTA asar（net.fetch 透明读 asar 内部）
-      const filePath = path.join(getActiveRendererRoot(), decodeURIComponent(pathname))
+      const root = path.resolve(getActiveRendererRoot())
+      const filePath = path.resolve(root, '.' + decodeURIComponent(pathname))
+      if (new URL(request.url).hostname !== 'local' || !isWithin(root, filePath)) return new Response(null, { status: 403 })
       try {
         return await net.fetch(pathToFileURL(filePath).toString())
       } catch (err) {
@@ -634,10 +1090,14 @@ app.whenReady().then(() => {
       }
     })
   }
+  for (const [key, command] of [['MediaPlayPause', 'toggle-play'], ['MediaNextTrack', 'next'], ['MediaPreviousTrack', 'prev']] as const) {
+    if (!globalShortcut.register(key, () => sendTrayCommand(command))) console.warn(`[Media] ${key} unavailable; MediaSession fallback remains active`)
+  }
   setupBiliHeaders()
   registerBiliApiHandlers()
   registerLyricsApiHandlers()
   registerWebdavHandlers()
+  registerPlaylistImportHandlers()
   // 更新模块须在创建窗口前初始化：bootReconcile 先定下生效的渲染层根目录，供 app:// 加载
   initUpdates({
     window: () => mainWindow,

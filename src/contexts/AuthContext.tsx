@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
-import { getLoginStatus, getUserInfo, logout as apiLogout } from '@/services/api'
+import { getLoginStatus, logout as apiLogout } from '@/services/api'
+
+import { PLAYLISTS_CHANGED_EVENT, FAVORITES_CHANGED_EVENT } from '@/utils/storage'
 
 const STORAGE_KEY = 'bilimusic_user'
 
@@ -54,10 +56,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const status = await getLoginStatus()
       setIsLoggedIn(status.isLoggedIn)
       if (status.isLoggedIn) {
-        const info = await getUserInfo()
+        const info = status
         setUsername(info.uname)
         setAvatar(info.face)
         saveCachedUser(info.uname, info.face)
+        window.dispatchEvent(new Event(PLAYLISTS_CHANGED_EVENT))
+        window.dispatchEvent(new Event(FAVORITES_CHANGED_EVENT))
       } else {
         clearCachedUser()
         setUsername('未登录')

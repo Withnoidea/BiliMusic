@@ -1,6 +1,9 @@
+import { shuffledFrom, reconcileShuffle } from '@/utils/playQueue'
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { Track, RepeatMode } from '@/types'
 import { extractAudio } from '@/services/api'
+import { getLocalAudio } from '@/services/downloadManager'
+import { fadeVolume, waitForMetadata, startPlayback, rememberPosition, savedPosition } from '@/services/playback'
 import { addRecentTrack, toggleFavoriteTrack, loadFavoriteTracks } from '@/utils/storage'
 import { useAppSettings } from '@/hooks/useAppSettings'
 
@@ -13,6 +16,7 @@ interface PlayerState {
   isShuffled: boolean
   queue: Track[]
   loadingAudio: boolean
+  playbackSource: 'local' | 'online' | null
 }
 
 interface PlayerActions {
@@ -31,11 +35,13 @@ interface PlayerActions {
   removeMultipleFromQueue: (trackIds: string[]) => void
   moveInQueue: (fromIndex: number, toIndex: number) => void
   playNow: (track: Track) => void
+  playFromList: (track: Track, list: Track[]) => void
   playNext: (track: Track) => void
   clearQueue: () => void
   toggleLike: (trackId: string) => void
   playAll: (tracks: Track[]) => void
   playFromQueue: (index: number) => void
+  showToast: (msg: string) => void
 }
 
 interface PlayerProgress {
@@ -99,15 +105,6 @@ function loadPersistedPlayerState(): PersistedPlayerState {
   }
 }
 
-function shuffleArray<T>(arr: T[]): T[] {
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
-
 function shouldIgnoreSpaceShortcut(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
@@ -138,7 +135,9 @@ function clearMediaSessionActions(actions: MediaSessionAction[]): void {
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const { settings } = useAppSettings()
-  const restoredRef = useRef(loadPersistedPlayerState())
+  const [initialState] = useState(loadPersistedPlayerState)
+  const restoredRef = useRef(initialState)
+  const [loadVersion, setLoadVersion] = useState(0)
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => restoredRef.current.currentTrack)
   const [isPlaying, setIsPlaying] = useState(() => Boolean(restoredRef.current.currentTrack && restoredRef.current.wasPlaying))
   const [progress, setProgress] = useState(() => restoredRef.current.progress)
@@ -158,6 +157,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const progressRef = useRef(progress)
   const durationRef = useRef(duration)
+  const targetVolumeRef = useRef(volume / 100)
+  const seekVersionRef = useRef(0)
+  const retryPlaybackRef = useRef<(() => void) | null>(null)
+  const [playbackSource, setPlaybackSource] = useState<'local' | 'online' | null>(null)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -172,23 +175,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     audioRef.current = audio
 
     const onTimeUpdate = () => setProgress(audio.currentTime)
-    const onDuration = () => setDuration(audio.duration || 0)
+    const onDuration = () => setDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
     const onEnded = () => { /* handled in playTrack */ }
-    const onError = () => {
-      setLoadingAudio(false)
-      setIsPlaying(false)
-    }
+    const onPlaying = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
 
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('loadedmetadata', onDuration)
     audio.addEventListener('ended', onEnded)
-    audio.addEventListener('error', onError)
+    audio.addEventListener('playing', onPlaying)
+    audio.addEventListener('pause', onPause)
 
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('loadedmetadata', onDuration)
       audio.removeEventListener('ended', onEnded)
-      audio.removeEventListener('error', onError)
+      audio.removeEventListener('playing', onPlaying)
+      audio.removeEventListener('pause', onPause)
       audio.pause()
       audio.src = ''
     }
@@ -197,7 +200,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // volume 同步到 audio
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = volume / 100
+      targetVolumeRef.current = volume / 100
+      void fadeVolume(audioRef.current, volume / 100)
       audioRef.current.muted = isMuted
     }
     localStorage.setItem('bilimusic_volume', String(volume))
@@ -227,7 +231,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (audioRef.current) {
           audioRef.current.currentTime = 0
           shouldAutoplayRef.current = true
-          audioRef.current.play().catch(() => {})
+          audioRef.current.volume = 0
+          const audio = audioRef.current
+          audio.play().then(() => fadeVolume(audio, targetVolumeRef.current)).catch(() => retryPlaybackRef.current?.())
         }
         return
       case 'all': {
@@ -235,6 +241,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           ? 0 : currentIndexRef.current + 1
         currentIndexRef.current = nextIdx
         shouldAutoplayRef.current = true
+        setLoadVersion(v => v + 1)
         setCurrentTrack(displayQueue[nextIdx])
         setProgress(0)
         setIsPlaying(true)
@@ -248,6 +255,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
         currentIndexRef.current = nextIdx
         shouldAutoplayRef.current = true
+        setLoadVersion(v => v + 1)
         setCurrentTrack(displayQueue[nextIdx])
         setProgress(0)
         setIsPlaying(true)
@@ -255,52 +263,108 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [isShuffled, queue, repeatMode, settings.autoPlay])
 
-  // 当 currentTrack 变化时加载并播放音频
+  // One source lifecycle owns retries, listeners and cancellation, preventing late requests from stealing playback.
   useEffect(() => {
-    if (!currentTrack || !audioRef.current) return
-
-    let cancelled = false
     const audio = audioRef.current
-
-    async function loadAndPlay() {
+    if (!currentTrack || !audio) return
+    const track = currentTrack
+    const controller = new AbortController()
+    let busy = false, attempts = 0, localSource = false, ready = false
+    let lastBookmark = 0
+    let stalledTimer: ReturnType<typeof setTimeout> | undefined
+    const firstRestore = restoredRef.current.currentTrack?.id === track.id
+    const initialPosition = firstRestore ? restoredRef.current.progress : savedPosition(track.id)
+    restoredRef.current.currentTrack = null
+    const clearStall = () => { clearTimeout(stalledTimer); stalledTimer = undefined }
+    const save = () => { if (ready) rememberPosition(track.id, audio.currentTime, audio.duration) }
+    const onTime = () => {
+      if (Date.now() - lastBookmark > 5000) { save(); lastBookmark = Date.now() }
+      if (audio.readyState >= 3) clearStall()
+    }
+    async function load(position: number, forceOnline = false) {
+      if (busy || controller.signal.aborted) return
+      busy = true
+      ready = false
+      clearStall()
       setLoadingAudio(true)
+      setPlaybackSource(null)
       try {
-        const fallback = currentTrack!.aid && currentTrack!.cid
-          ? { aid: currentTrack!.aid, cid: currentTrack!.cid }
-          : undefined
-        const source = await extractAudio(currentTrack!.bvid || currentTrack!.id, fallback)
-        if (cancelled) return
-        const targetProgress = progress > 0 ? progress : 0
-        audio.src = source.audioUrl
-        audio.currentTime = targetProgress
+        await fadeVolume(audio!, 0, audio!.paused ? 1 : 150)
+        if (controller.signal.aborted) return
+        audio!.pause()
+        const local = !forceOnline ? await getLocalAudio(track) : null
+        const fallback = track.aid && track.cid ? { aid: track.aid, cid: track.cid } : undefined
+        const source = local ? { audioUrl: local, duration: track.duration, coverUrl: track.coverUrl } : await extractAudio(track.bvid || track.id, fallback)
+        if (controller.signal.aborted) return
+        localSource = Boolean(local)
+        audio!.src = source.audioUrl
+        audio!.load()
+        await waitForMetadata(audio!, controller.signal)
+        if (controller.signal.aborted) return
+        const duration = Number.isFinite(audio!.duration) ? audio!.duration : source.duration
+        audio!.currentTime = Math.max(0, Math.min(position, Math.max(0, duration - 0.5)))
+        setProgress(audio!.currentTime)
+        setDuration(duration)
+        setPlaybackSource(localSource ? 'local' : 'online')
+        ready = true
         if (shouldAutoplayRef.current) {
-          await audio.play()
-          setIsPlaying(true)
-        } else {
-          audio.pause()
-          setIsPlaying(false)
+          await startPlayback(audio!, controller.signal)
+          if (controller.signal.aborted) return
+          await fadeVolume(audio!, targetVolumeRef.current)
         }
-        setDuration(source.duration || audio.duration || 0)
-
-        // 更新封面（提取到的可能更高清）
-        if (source.coverUrl) {
-          setCurrentTrack(prev => prev ? { ...prev, coverUrl: source.coverUrl } : null)
+        if (!controller.signal.aborted) {
+          setCurrentTrack(prev => prev?.id === track.id ? { ...prev, coverUrl: source.coverUrl || track.coverUrl } : prev)
+          addRecentTrack({ ...track, coverUrl: source.coverUrl || track.coverUrl })
         }
-        // 记录最近播放
-        addRecentTrack({ ...currentTrack!, coverUrl: source.coverUrl || currentTrack!.coverUrl })
-      } catch {
-        if (!cancelled) {
-          // 降级：直接用原始信息触发 play（无音频源，标记为不可播放）
-          setIsPlaying(false)
+      } catch (error) {
+        if (controller.signal.aborted) return
+        if (attempts < 2 && !(error instanceof DOMException && error.name === 'NotAllowedError')) {
+          attempts++
+          busy = false
+          await load(position, true)
+          return
         }
+        setIsPlaying(false)
+        showToast(navigator.onLine ? '暂时无法播放，点击播放可重新连接' : '当前离线，未找到完整的本地音轨')
       } finally {
-        if (!cancelled) setLoadingAudio(false)
+        busy = false
+        if (!controller.signal.aborted) setLoadingAudio(false)
       }
     }
-
-    loadAndPlay()
-    return () => { cancelled = true }
-  }, [currentTrack?.id, currentTrack?.bvid])
+    const recover = () => {
+      if (busy || controller.signal.aborted) return
+      save()
+      if (attempts >= 2) { setLoadingAudio(false); setIsPlaying(false); audio.pause(); showToast('音频连接中断，点击播放重试'); return }
+      attempts++
+      void load(audio.currentTime || progressRef.current, localSource)
+    }
+    const onStall = () => {
+      if (!shouldAutoplayRef.current || busy || stalledTimer) return
+      stalledTimer = setTimeout(recover, 12000)
+    }
+    retryPlaybackRef.current = () => { attempts = 0; void load(audio.currentTime || progressRef.current) }
+    audio.addEventListener('error', recover)
+    audio.addEventListener('stalled', onStall)
+    audio.addEventListener('waiting', onStall)
+    audio.addEventListener('playing', clearStall)
+    audio.addEventListener('timeupdate', onTime)
+    audio.addEventListener('pause', save)
+    audio.addEventListener('ended', save)
+    window.addEventListener('beforeunload', save)
+    void load(initialPosition)
+    return () => {
+      save(); controller.abort(); clearStall(); seekVersionRef.current++
+      retryPlaybackRef.current = null
+      audio.removeEventListener('error', recover)
+      audio.removeEventListener('stalled', onStall)
+      audio.removeEventListener('waiting', onStall)
+      audio.removeEventListener('playing', clearStall)
+      audio.removeEventListener('timeupdate', onTime)
+      audio.removeEventListener('pause', save)
+      audio.removeEventListener('ended', save)
+      window.removeEventListener('beforeunload', save)
+    }
+  }, [currentTrack?.id, currentTrack?.bvid, loadVersion])
 
   // ended 事件
   useEffect(() => {
@@ -311,6 +375,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [handleTrackEnd])
 
   const play = useCallback((track: Track) => {
+    setLoadVersion(v => v + 1)
     shouldAutoplayRef.current = true
     setCurrentTrack(track)
     setProgress(0)
@@ -333,13 +398,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setIsPlaying(false)
     } else {
       shouldAutoplayRef.current = true
-      audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {})
+      const audio = audioRef.current
+      if (!audio?.src || audio.error) { retryPlaybackRef.current?.(); return }
+      audio.volume = 0
+      audio.play().then(() => { if (shouldAutoplayRef.current) void fadeVolume(audio, targetVolumeRef.current) }).catch(() => retryPlaybackRef.current?.())
     }
   }, [currentTrack, isPlaying])
 
   const next = useCallback(() => {
     const displayQueue = isShuffled ? shuffledQueueRef.current : queue
     if (displayQueue.length === 0) return
+    setLoadVersion(v => v + 1)
     const nextIdx = currentIndexRef.current + 1 >= displayQueue.length
       ? 0 : currentIndexRef.current + 1
     currentIndexRef.current = nextIdx
@@ -352,6 +421,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const prev = useCallback(() => {
     const displayQueue = isShuffled ? shuffledQueueRef.current : queue
     if (displayQueue.length === 0) return
+    setLoadVersion(v => v + 1)
     const prevIdx = currentIndexRef.current - 1 < 0
       ? displayQueue.length - 1 : currentIndexRef.current - 1
     currentIndexRef.current = prevIdx
@@ -362,14 +432,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [isShuffled, queue])
 
   const handleSetProgress = useCallback((p: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = p
-    }
-    setProgress(p)
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(p) || audio.readyState < 1) return
+    const position = Math.max(0, Math.min(p, durationRef.current || p))
+    const version = ++seekVersionRef.current
+    setProgress(position)
+    void (async () => {
+      if (!audio.paused) await fadeVolume(audio, 0)
+      if (version !== seekVersionRef.current) return
+      audio.currentTime = position
+      await fadeVolume(audio, targetVolumeRef.current)
+    })()
   }, [])
 
   const handleSetVolume = useCallback((v: number) => {
-    setVolumeState(v)
+    setVolumeState(Math.max(0, Math.min(100, v)))
   }, [])
 
   const addToQueue = useCallback((track: Track) => {
@@ -442,6 +519,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // 立即播放：把曲目置于队列首位并播放（点击歌曲的默认行为）
   const playNow = useCallback((track: Track) => {
+    setLoadVersion(v => v + 1)
     shouldAutoplayRef.current = true
     setQueue(prev => [track, ...prev.filter(t => t.id !== track.id)])
     setCurrentTrack(track)
@@ -484,32 +562,41 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setQueue(prev => prev.map(t => t.id === trackId ? { ...t, isLiked: !t.isLiked } : t))
   }, [queue, currentTrack])
 
-  const playAll = useCallback((tracks: Track[]) => {
-    if (tracks.length === 0) return
-    const favs = loadFavoriteTracks()
-    const favIds = new Set(favs.map(t => t.id))
-    const synced = tracks.map(t => ({ ...t, isLiked: favIds.has(t.id) }))
+  const playFromList = useCallback((track: Track, tracks: Track[]) => {
+    if (!tracks.some(item => item.id === track.id)) return
+    const favIds = new Set(loadFavoriteTracks().map(item => item.id))
+    const unique = [...new Map(tracks.map(item => [item.id, item])).values()]
+    const synced = unique.map(item => ({ ...item, isLiked: favIds.has(item.id) }))
+    const selected = synced.find(item => item.id === track.id)!
+    shuffledQueueRef.current = isShuffled ? shuffledFrom(synced, selected.id) : []
+    currentIndexRef.current = isShuffled ? 0 : synced.findIndex(item => item.id === selected.id)
     setQueue(synced)
     shouldAutoplayRef.current = true
-    setCurrentTrack(synced[0])
-    currentIndexRef.current = 0
+    setLoadVersion(v => v + 1)
+    setCurrentTrack(selected)
     setProgress(0)
     setIsPlaying(true)
-  }, [])
+  }, [isShuffled])
+
+  const playAll = useCallback((tracks: Track[]) => {
+    if (tracks.length) playFromList(tracks[0], tracks)
+  }, [playFromList])
 
   const playFromQueue = useCallback((index: number) => {
     const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (index < 0 || index >= displayQueue.length) return
-    currentIndexRef.current = index
+    if (index < 0 || index >= queue.length) return
+    const selected = queue[index]
+    currentIndexRef.current = displayQueue.findIndex(track => track.id === selected.id)
     shouldAutoplayRef.current = true
-    setCurrentTrack(displayQueue[index])
+    setLoadVersion(v => v + 1)
+    setCurrentTrack(selected)
     setProgress(0)
     setIsPlaying(true)
   }, [isShuffled, queue])
 
   // 更新 shuffledQueueRef
   useEffect(() => {
-    shuffledQueueRef.current = isShuffled ? shuffleArray(queue) : queue
+    shuffledQueueRef.current = isShuffled ? reconcileShuffle(shuffledQueueRef.current, queue, currentTrack?.id) : []
   }, [queue, isShuffled])
 
   useEffect(() => {
@@ -522,25 +609,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     currentIndexRef.current = index >= 0 ? index : 0
   }, [currentTrack?.id, isShuffled, queue])
 
+  const persistedStateRef = useRef<PersistedPlayerState | null>(null)
+  persistedStateRef.current = { currentTrack, queue, progress, duration, volume, isMuted, repeatMode, isShuffled, wasPlaying: isPlaying, currentIndex: currentIndexRef.current }
+  const persistPlayer = useCallback(() => {
+    try { localStorage.setItem(PLAYER_STATE_KEY, JSON.stringify(persistedStateRef.current)) } catch { /* storage full */ }
+  }, [])
   useEffect(() => {
-    try {
-      const state: PersistedPlayerState = {
-        currentTrack,
-        queue,
-        progress,
-        duration,
-        volume,
-        isMuted,
-        repeatMode,
-        isShuffled,
-        wasPlaying: isPlaying,
-        currentIndex: currentIndexRef.current,
-      }
-      localStorage.setItem(PLAYER_STATE_KEY, JSON.stringify(state))
-    } catch {
-      // ignore persistence failures
-    }
-  }, [currentTrack, duration, isMuted, isPlaying, isShuffled, progress, queue, repeatMode, volume])
+    persistPlayer()
+  }, [currentTrack, queue, isPlaying, volume, isMuted, repeatMode, isShuffled, persistPlayer])
+  useEffect(() => {
+    const timer = setInterval(persistPlayer, 5000)
+    window.addEventListener('beforeunload', persistPlayer)
+    return () => { clearInterval(timer); window.removeEventListener('beforeunload', persistPlayer); persistPlayer() }
+  }, [persistPlayer])
 
   useEffect(() => {
     const pushTrayState = () => window.electronAPI?.updateTrayPlayerState?.({
@@ -666,6 +747,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     isShuffled,
     queue,
     loadingAudio,
+    playbackSource,
     play,
     pause,
     togglePlay,
@@ -681,16 +763,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     removeMultipleFromQueue,
     moveInQueue,
     playNow,
+    playFromList,
     playNext,
     clearQueue,
     toggleLike,
     playAll,
     playFromQueue,
+    showToast,
   }), [
-    currentTrack, isPlaying, volume, isMuted, repeatMode, isShuffled, queue, loadingAudio,
+    currentTrack, isPlaying, volume, isMuted, repeatMode, isShuffled, queue, loadingAudio, playbackSource,
     play, pause, togglePlay, next, prev, handleSetVolume, setIsMuted, setRepeatMode, setIsShuffled,
     addToQueue, addTracksToQueue, removeFromQueue, removeMultipleFromQueue, moveInQueue,
-    playNow, playNext, clearQueue, toggleLike, playAll, playFromQueue,
+    playNow, playFromList, playNext, clearQueue, toggleLike, playAll, playFromQueue,
   ])
 
   // 进度高频更新（timeupdate ~4Hz）独立成 context，仅 PlayerBar/NowPlaying 订阅

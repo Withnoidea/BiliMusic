@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Plus,
   X,
+  ArrowDownToLine,
   type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -44,6 +45,12 @@ const menuGroups: Array<{ title: string; items: NavItem[] }> = [
     ],
   },
   {
+    title: '导入',
+    items: [
+      { icon: ArrowDownToLine, label: '歌单导入', path: '/import' },
+    ],
+  },
+  {
     title: '播放列表',
     items: [
       { icon: ListMusic, label: '所有歌单', path: '/playlists' },
@@ -65,7 +72,7 @@ export default function Sidebar() {
   const [playlists, setPlaylists] = useState<Playlist[]>(() => loadPlaylists())
   const [creating, setCreating] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1100)
-  const collapsed = settings.sidebarState === 'collapsed' || (settings.sidebarState === 'auto' && isNarrow)
+  const collapsed = settings.sidebarState === 'collapsed' || isNarrow
 
   useEffect(() => {
     const sync = () => setPlaylists(loadPlaylists())
@@ -406,7 +413,7 @@ function SidebarLink({ item, compact = false, collapsed = false }: { item: NavIt
 
   return (
     <NavLink to={item.path} style={{ textDecoration: 'none' }}>
-      {({ isActive }) => {
+      {() => {
         const selected = item.path === '/discover'
           ? pathname === '/' || pathname === '/discover'
           : pathname === item.path
