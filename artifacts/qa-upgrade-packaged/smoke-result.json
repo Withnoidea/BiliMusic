@@ -1,8 +1,8 @@
 {
   "passed": true,
-  "releaseDir": "release/music-upgrade",
+  "releaseDir": "release",
   "appVersion": "1.0.4",
-  "testedAt": "2026-10-09T16:35:57.090Z",
+  "testedAt": "2026-10-09T17:12:39.305Z",
   "testedAsarSha256": "42d096239e967b74a5c2d7b1ba4df0126a8fa56ee6b674c1fb94fbee5604a31d",
   "packaged": true,
   "skippedChecks": [],

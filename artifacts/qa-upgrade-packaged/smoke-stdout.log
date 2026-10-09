@@ -1,6 +1,6 @@
 
-[BiliMusic-OTA] init done. otaRoot= E:\document\project\BiliMusic\artifacts\qa-upgrade-packaged\profile-nHV8Hg\bilimusic\ota\Withnoidea-BiliMusic | activeRenderer= bundled
-[BiliMusic-OTA] activeRendererRoot= E:\document\project\BiliMusic\release\music-upgrade\win-unpacked\resources\app.asar\dist
+[BiliMusic-OTA] init done. otaRoot= E:\document\project\BiliMusic\artifacts\qa-upgrade-packaged\profile-OIwQxJ\bilimusic\ota\Withnoidea-BiliMusic | activeRenderer= bundled
+[BiliMusic-OTA] activeRendererRoot= E:\document\project\BiliMusic\release\win-unpacked\resources\app.asar\dist
 [renderer] [preload] Electron preload script starting...
 [renderer] [preload] Electron preload script starting...
 [BiliMusic-OTA] check: manifest= none | appV= 1.0.4
