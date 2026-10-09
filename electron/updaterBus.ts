@@ -3,6 +3,7 @@ import type { BrowserWindow } from 'electron'
 // 推给渲染层的统一更新事件（整包 electron-updater + 渲染热补丁共用 updater:event 通道）
 export type UpdaterEvent =
   | { type: 'checking' }
+  | { type: 'unavailable'; message: string }
   | { type: 'up-to-date'; version: string }
   | { type: 'available'; version: string; notes?: string }
   | { type: 'progress'; percent: number }

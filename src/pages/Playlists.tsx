@@ -22,9 +22,12 @@ import {
 } from '@/utils/storage'
 import type { Playlist, Track } from '@/types'
 
+// Keep effect dependencies stable while a playlist is deleted or missing.
+const EMPTY_TRACKS: Track[] = []
+
 export default function Playlists() {
   const { playlistId } = useParams()
-  return playlistId ? <PlaylistDetail playlistId={playlistId} /> : <PlaylistOverview />
+  return playlistId ? <PlaylistDetail key={playlistId} playlistId={playlistId} /> : <PlaylistOverview />
 }
 
 function PlaylistOverview() {
@@ -96,14 +99,14 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
   const navigate = useNavigate()
   const { records, resumePlaylist } = useImport()
 
-  const tracks = playlist?.tracks || []
+  const tracks = playlist?.tracks ?? EMPTY_TRACKS
 
   const refreshDownloaded = useCallback(() => {
     const set = new Set<string>()
     for (const t of tracks) {
       if (isTrackDownloaded(t.id)) set.add(t.id)
     }
-    setDownloadedIds(set)
+    setDownloadedIds(previous => previous.size === set.size && [...set].every(id => previous.has(id)) ? previous : set)
   }, [tracks])
 
   useEffect(() => {
@@ -170,13 +173,14 @@ function PlaylistDetail({ playlistId }: { playlistId: string }) {
     return (
       <MusicPageShell>
         <EmptyLibrary icon={<ListMusic size={40} />} title="歌单不存在" subtitle="这个歌单可能已经被删除。" />
+        <Link className="am-action am-action--subtle" to="/playlists">返回所有歌单</Link>
       </MusicPageShell>
     )
   }
 
   const handleDelete = () => {
     deletePlaylist(playlist.id)
-    navigate('/playlists')
+    navigate('/playlists', { replace: true })
   }
 
   const removeSelected = () => {

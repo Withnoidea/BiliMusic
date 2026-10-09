@@ -92,7 +92,7 @@ export default function Import() {
 
   // ===== 手动查找保底 =====
   const openManualSearch = (index: number, trackName: string, trackArtist: string) => {
-    setManual({ index, query: `${trackName} ${trackArtist.split(/[\/&,，]/)[0] || ''}`.trim(), loading: false, candidates: [], manualError: '' })
+    setManual({ index, query: `${trackName} ${trackArtist.split(/[/&,，]/)[0] || ''}`.trim(), loading: false, candidates: [], manualError: '' })
   }
   const closeManualSearch = () => setManual(null)
 

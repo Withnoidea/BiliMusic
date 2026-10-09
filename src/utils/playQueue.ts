@@ -24,3 +24,12 @@ export function reconcileShuffle(previous: Track[], tracks: Track[], currentId?:
   const seen = new Set(kept.map(track => track.id))
   return [...kept, ...shuffleArray(tracks.filter(track => !seen.has(track.id)))]
 }
+
+/** Natural end differs from the user explicitly pressing Next. */
+export function trackEndAction(mode: 'none' | 'all' | 'one', autoPlay: boolean, length: number, index: number): 'stop' | 'replay' | number {
+  if (mode === 'one') return 'replay'
+  if (!autoPlay || length === 0) return 'stop'
+  const next = index + 1
+  if (next < length) return Math.max(0, next)
+  return mode === 'all' ? 0 : 'stop'
+}

@@ -3,7 +3,7 @@ import { X, Loader2, Smartphone, CheckCircle2, AlertCircle, RefreshCw } from 'lu
 import QRCode from 'qrcode'
 import { generateQrCode, pollQrCode } from '@/services/api'
 
-type QrStatus = 'loading' | 'waiting' | 'scanned' | 'success' | 'expired' | 'error'
+type QrStatus = 'loading' | 'waiting' | 'scanned' | 'finalizing' | 'success' | 'expired' | 'error'
 
 interface LoginDialogProps {
   onClose: () => void
@@ -15,6 +15,9 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
   const [countdown, setCountdown] = useState(180)
   const [errorMsg, setErrorMsg] = useState('')
+  const [canRetryLogin, setCanRetryLogin] = useState(false)
+  const retryLogin = useRef<() => void>(() => {})
+  const expiresAt = useRef(0)
   const callbacks = useRef({ onClose, onSuccess })
   callbacks.current = { onClose, onSuccess }
   const generation = useRef(0)
@@ -37,6 +40,7 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
     stopPolling()
     setStatus('loading')
     setErrorMsg('')
+    setCanRetryLogin(false)
     setCountdown(180)
     try {
       const data = await generateQrCode()
@@ -44,13 +48,16 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
         width: 200, margin: 2, color: { dark: '#18191C', light: '#FFFFFF' },
       })
       if (attempt !== generation.current) return
+      expiresAt.current = Date.now() + 180_000
       setQrDataUrl(dataUrl)
       setStatus('waiting')
+      let networkErrors = 0
       const poll = async () => {
         if (attempt !== generation.current) return
         try {
           const result = await pollQrCode(data.qrcodeKey)
           if (attempt !== generation.current) return
+          networkErrors = 0
           const code = result.status ?? result.code
           if (code === 0) {
             ++generation.current
@@ -60,10 +67,43 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
             callbacks.current.onClose()
             return
           }
+          if (result.confirmed) {
+            stopPolling()
+            setStatus('error')
+            setErrorMsg(result.message || '手机已确认，请重试完成登录')
+            setCanRetryLogin(!!result.retryable)
+            return
+          }
           if (code === 86038) { ++generation.current; setStatus('expired'); stopPolling(); return }
           if (code === 86090) setStatus('scanned')
-        } catch { /* retry serially without overlapping requests */ }
+          else if (code === 86101) setStatus('waiting')
+          else if (code !== 86101) {
+            stopPolling()
+            setStatus('error')
+            setErrorMsg('扫码状态暂不可用，请刷新二维码后重试')
+            return
+          }
+        } catch {
+          if (attempt !== generation.current) return
+          if (++networkErrors >= 3) {
+            stopPolling()
+            setStatus('error')
+            setErrorMsg('连接登录服务失败，请检查网络后重试')
+            // The main process may already hold a confirmed response; retry the
+            // same attempt rather than silently losing it or calling it expired.
+            setCanRetryLogin(true)
+            return
+          }
+        }
         if (attempt === generation.current) pollTimerRef.current = setTimeout(poll, 2000)
+      }
+      retryLogin.current = () => {
+        if (attempt !== generation.current) return
+        stopPolling()
+        networkErrors = 0
+        setCanRetryLogin(false)
+        setStatus('finalizing')
+        void poll()
       }
       pollTimerRef.current = setTimeout(poll, 2000)
     } catch (e: any) {
@@ -78,15 +118,9 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
     if (status !== 'waiting' && status !== 'scanned') return
 
     countdownRef.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          ++generation.current
-          setStatus('expired')
-          stopPolling()
-          return 0
-        }
-        return prev - 1
-      })
+      // Local time is only a hint. Only Bilibili's 86038 means expired; an
+      // in-flight confirmation must not be cancelled when this reaches zero.
+      setCountdown(Math.max(0, Math.ceil((expiresAt.current - Date.now()) / 1000)))
     }, 1000)
 
     return () => {
@@ -160,7 +194,7 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
             overflow: 'hidden',
           }}
         >
-          {status === 'loading' && (
+          {(status === 'loading' || status === 'finalizing') && (
             <Loader2 size={32} style={{ color: 'var(--color-primary)', animation: 'spin 1s linear infinite' }} />
           )}
 
@@ -219,7 +253,7 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
                 </>
               )}
               <button
-                onClick={generate}
+                onClick={canRetryLogin ? () => retryLogin.current() : generate}
                 style={{
                   marginTop: 4,
                   padding: '6px 16px',
@@ -237,12 +271,14 @@ export default function LoginDialog({ onClose, onSuccess }: LoginDialogProps) {
                 }}
               >
                 <RefreshCw size={14} />
-                刷新二维码
+                {canRetryLogin ? '重试完成登录' : '刷新二维码'}
               </button>
+              {canRetryLogin && <button onClick={generate} style={{ border: 'none', background: 'none', color: 'var(--color-muted)', cursor: 'pointer', fontSize: 12 }}>重新生成二维码</button>}
             </div>
           )}
         </div>
 
+        {status === 'finalizing' && <p className="text-caption" role="status">正在完成登录，请稍候…</p>}
         {status === 'waiting' && (
           <div style={{ textAlign: 'center' }}>
             <p className="text-body" style={{ color: 'var(--color-foreground)' }}>

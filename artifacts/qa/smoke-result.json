@@ -1,13 +1,41 @@
 {
   "passed": true,
+  "releaseDir": "release",
+  "testedAt": "2026-10-09T07:44:48.495Z",
+  "testedAsarSha256": null,
   "packaged": false,
+  "skippedChecks": [],
+  "updateRequests": [
+    "https://github.com/Withnoidea/BiliMusic/releases/latest/download/ota.json",
+    "https://api.github.com/repos/Withnoidea/BiliMusic/releases/latest",
+    "https://github.com/Withnoidea/BiliMusic/releases/latest/download/ota.json",
+    "https://api.github.com/repos/Withnoidea/BiliMusic/releases/latest",
+    "https://github.com/Withnoidea/BiliMusic/releases/latest/download/ota.json",
+    "https://github.com/Withnoidea/BiliMusic/releases/latest/download/ota.json",
+    "https://api.github.com/repos/Withnoidea/BiliMusic/releases/latest",
+    "https://github.com/Withnoidea/BiliMusic/releases/latest/download/ota.json",
+    "https://api.github.com/repos/Withnoidea/BiliMusic/releases/latest"
+  ],
+  "externalUrls": [
+    "https://github.com/Withnoidea/BiliMusic",
+    "https://github.com/Withnoidea/BiliMusic/releases",
+    "https://github.com/Withnoidea/BiliMusic/releases"
+  ],
+  "qrUpstreamPolls": 3,
+  "qrCookieHeaderEntries": 1,
   "checks": [
+    "delete populated/empty playlist then native mouse navigation on all nine pages",
+    "missing route and externally deleted playlist settle without render loop",
+    "fork-only update endpoints and about/release links",
+    "no-release message, network failure retry and manual download without OTA",
     "dynamic discovery dimensions and pagination",
     "recommendation durations and detail fallback",
     "full favorites and playlist queues",
     "sequential next/previous",
     "shuffle full coverage and history",
-    "QR double-store persistence and immediate profile refresh",
+    "QR real HTTP merged headers, double-store persistence and immediate profile refresh",
+    "confirmed QR flush failure retries without upstream re-poll or false expiry",
+    "genuine server expiry still works",
     "idle lyric preview and long-line ellipsis",
     "four-edge lyric clamp, no incremental drift, blur/cancel/global release recovery",
     "production debug switch closed",
@@ -25,7 +53,7 @@
     "all windows sandboxed and isolated",
     "no renderer console errors"
   ],
-  "playRequests": 7,
+  "playRequests": 4,
   "viewport": {
     "width": 721,
     "body": 721,

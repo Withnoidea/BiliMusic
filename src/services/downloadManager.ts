@@ -12,7 +12,7 @@ export interface DownloadedTrack extends Track {
 export interface DownloadJob {
   id: string
   track: Track
-  state: 'queued' | 'resolving' | 'downloading' | 'completed' | 'failed'
+  state: 'queued' | 'resolving' | 'downloading' | 'transcoding' | 'completed' | 'failed'
   percent: number | null
   error?: string
 }
@@ -81,7 +81,10 @@ export function downloadSingleTrack(track: Track, onProgress?: (message: string)
       let unsubscribe: (() => void) | undefined
       try {
         if (!window.electronAPI?.biliApi) throw new Error('请在桌面客户端中下载音乐')
-        const local = await getLocalAudio(track)
+        const settings = loadAppSettings()
+        const format = settings.downloadFormat === 'm4a' ? 'm4a' : 'mp3'
+        const recorded = getDownloadedTracks().find(item => item.id === track.id)
+        const local = recorded?.localFilename.endsWith(`.${format}`) ? await getLocalAudio(track) : null
         if (local) {
           const item = getDownloadedTracks().find(t => t.id === track.id)!
           if (item) { job.state = 'completed'; job.percent = 100; resolve(item); return }
@@ -90,15 +93,16 @@ export function downloadSingleTrack(track: Track, onProgress?: (message: string)
         const fallback = track.aid && track.cid ? { aid: track.aid, cid: track.cid } : undefined
         const source = await extractAudio(track.bvid || track.id, fallback)
         if (!source.audioUrl) throw new Error('未找到可用音频流')
-        const filename = `${sanitizeFilename(track.title)} - ${sanitizeFilename(track.artist)}_${sanitizeFilename(track.id).slice(0, 28)}.m4a`
-        const directory = loadAppSettings().downloadDir?.trim() || undefined
+        const filename = `${sanitizeFilename(track.title)} - ${sanitizeFilename(track.artist)}_${sanitizeFilename(track.id).slice(0, 28)}.${format}`
+        const directory = settings.downloadDir?.trim() || undefined
         job.state = 'downloading'; publish()
         unsubscribe = window.electronAPI.biliApi.onDownloadProgress(data => {
           if (data.filename !== filename) return
+          job.state = data.phase === 'transcoding' ? 'transcoding' : 'downloading'
           job.percent = data.percent; publish()
-          onProgress?.(data.percent === null ? '正在下载…' : `正在下载 ${Math.floor(data.percent)}%`)
+          onProgress?.(data.phase === 'transcoding' ? '正在转码 MP3 并写入封面标签…' : data.percent === null ? '正在下载…' : `正在下载 ${Math.floor(data.percent)}%`)
         })
-        const result = await window.electronAPI.biliApi.downloadAudio(source.audioUrl, filename, directory)
+        const result = await window.electronAPI.biliApi.downloadAudio(source.audioUrl, filename, directory, { title: track.title, artist: track.artist, album: track.album || track.title, coverUrl: track.coverUrl || source.coverUrl })
         const item: DownloadedTrack = { ...track, filePath: result.filePath, fileSize: result.size, localFilename: filename, downloadedAt: Date.now() }
         saveDownloadedTracks([item, ...getDownloadedTracks().filter(t => t.id !== track.id)])
         job.state = 'completed'; job.percent = 100

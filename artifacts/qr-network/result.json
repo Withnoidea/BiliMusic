@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "electron": "36.9.5",
+  "serverSetCookieCount": 3,
+  "getSetCookieCount": 1,
+  "defaultCrossOriginCookieSent": false,
+  "explicitIncludeCookieSent": true
+}

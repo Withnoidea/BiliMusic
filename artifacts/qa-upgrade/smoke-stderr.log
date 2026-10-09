@@ -1,0 +1,7 @@
+
+DevTools listening on ws://127.0.0.1:17689/devtools/browser/7cdfb803-ec88-4d39-8c91-56c6a4e796cb
+[40576:1010/002502.806:ERROR:content\browser\devtools\devtools_http_handler.cc:303] Error writing DevTools active port to file E:\document\project\BiliMusic\artifacts\qa-upgrade\profile-uNUMOI\bilimusic\DevToolsActivePort: 系统找不到指定的路径。 (0x3)
+Error occurred in handler for 'shell:open-path': Error: 下载目录未授权，请在设置中重新选择目录
+    at Fe (file:///E:/document/project/BiliMusic/dist-electron/main.js:55:89)
+    at async file:///E:/document/project/BiliMusic/dist-electron/main.js:1761:64
+    at async Session.<anonymous> (node:electron/js2c/browser_init:2:106823)

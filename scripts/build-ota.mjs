@@ -26,8 +26,8 @@ const buf = fs.readFileSync(asarPath)
 const sha512 = crypto.createHash('sha512').update(buf).digest('base64')
 
 // minShellVersion：能运行此渲染包的最低外壳版本。渲染层若未用到新 IPC/主进程能力，
-// 应保持较低基线（默认 1.0.0），使旧外壳也能热补丁；用到新能力时经 OTA_MIN_SHELL 抬高。
-const minShellVersion = process.env.OTA_MIN_SHELL || '1.0.0'
+// 默认使用当前版本，避免主进程修复仅更新界面；确认兼容旧外壳后才设置 OTA_MIN_SHELL。
+const minShellVersion = process.env.OTA_MIN_SHELL || version
 
 const manifest = {
   rendererVersion: version,

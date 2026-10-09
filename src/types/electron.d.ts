@@ -1,7 +1,7 @@
 interface BiliApi {
   request: (path: string) => Promise<any>
   localAudio: (filename: string, customDir?: string, size?: number) => Promise<string | null>
-  onDownloadProgress: (callback: (data: { filename: string; received: number; total: number; percent: number | null }) => void) => () => void
+  onDownloadProgress: (callback: (data: { filename: string; received: number; total: number; percent: number | null; phase?: 'downloading' | 'transcoding' | 'completed' }) => void) => () => void
   search: (keyword: string, page?: number, pageSize?: number) => Promise<any>
   videoDetail: (bvid: string) => Promise<any>
   playUrl: (bvid: string, cid: number) => Promise<any>
@@ -26,7 +26,7 @@ interface BiliApi {
   getDownloadDir: (customDir?: string) => Promise<string>
   deleteDownloadedFile: (filename: string, customDir?: string) => Promise<{ success: boolean; error?: string }>
   checkDownloadedFiles: (filenames: string[], customDir?: string) => Promise<Record<string, { exists: boolean; size?: number }>>
-  downloadAudio: (audioUrl: string, filename: string, customDir?: string) => Promise<{
+  downloadAudio: (audioUrl: string, filename: string, customDir?: string, metadata?: { title: string; artist: string; album?: string; coverUrl?: string }) => Promise<{
     filePath: string
     size: number
   }>
@@ -35,6 +35,8 @@ interface BiliApi {
     qrcodeKey: string
   }>
   qrPoll: (qrcodeKey: string) => Promise<{
+    confirmed?: boolean
+    retryable?: boolean
     code: number
     status: number
     message: string
@@ -145,6 +147,7 @@ export interface WebdavResult {
 // 统一更新事件（整包 electron-updater + 渲染热补丁共用此通道）
 export type UpdaterEvent =
   | { type: 'checking' }
+  | { type: 'unavailable'; message: string }
   | { type: 'up-to-date'; version: string }
   | { type: 'available'; version: string; notes?: string }
   | { type: 'progress'; percent: number }

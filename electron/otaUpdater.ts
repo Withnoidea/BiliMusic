@@ -4,13 +4,13 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import crypto from 'node:crypto'
 import { emitUpdater, ulog } from './updaterBus'
+import { PROJECT_REPOSITORY, RELEASE_DOWNLOAD_BASE } from '../src/config/project'
 
 // 渲染热补丁：从 GitHub Releases 下发 renderer-<version>.asar，校验后由 app:// 从可写沙箱加载。
 // 单文件 asar（桌面端 net.fetch 读 asar 内部已被现有打包路径证明可用），无需解压、原子可回滚。
 // 鸿蒙：原生移植层能力（沙箱可写 / net.fetch 读 asar / 外网下载）未知 —— 全程防御化，
 // 任一能力缺失即优雅降级到包内 dist，绝不崩；坏包经 ready 心跳缺失自动回滚并加入黑名单。
-const REPO = 'HanversionOvO/BiliMusic'
-const RELEASE_BASE = `https://github.com/${REPO}/releases/latest/download`
+const RELEASE_BASE = RELEASE_DOWNLOAD_BASE
 export const OTA_MANIFEST_URL = `${RELEASE_BASE}/ota.json`
 
 export interface OtaManifest {
@@ -32,7 +32,7 @@ interface OtaState {
   failedVersions: string[] // 套用后未通过验证被回滚的版本，不再重复下发
 }
 
-let state: OtaState = {
+const state: OtaState = {
   activeVersion: null,
   activeFile: null,
   verified: false,
@@ -51,7 +51,18 @@ function statePath(): string {
 function readState(): void {
   if (!otaRoot) return
   try {
-    state = { ...state, ...JSON.parse(fs.readFileSync(statePath(), 'utf8')) }
+    const saved = JSON.parse(fs.readFileSync(statePath(), 'utf8')) as OtaState
+    // Only newer bundles in this fork's namespace may override the shipped UI.
+    state.failedVersions = Array.isArray(saved.failedVersions) ? saved.failedVersions.filter(v => typeof v === 'string') : []
+    if (validBundle(saved.activeVersion, saved.activeFile) && semverGt(saved.activeVersion!, app.getVersion())) {
+      state.activeVersion = saved.activeVersion
+      state.activeFile = saved.activeFile
+      state.verified = saved.verified === true
+    }
+    if (validBundle(saved.pendingVersion, saved.pendingFile) && semverGt(saved.pendingVersion!, currentRendererVersion())) {
+      state.pendingVersion = saved.pendingVersion
+      state.pendingFile = saved.pendingFile
+    }
   } catch {
     /* 首次无状态文件，用默认值 */
   }
@@ -98,16 +109,30 @@ export function rendererUpdateAvailable(manifest: OtaManifest, appVersion: strin
   return true
 }
 
+const VERSION = /^\d+\.\d+\.\d+$/
+function validBundle(version: unknown, file: unknown): boolean {
+  return typeof version === 'string' && VERSION.test(version) && file === `renderer-${version}.asar`
+}
+
+function validateManifest(manifest: OtaManifest): void {
+  if (!manifest || !validBundle(manifest.rendererVersion, manifest.file)
+    || !VERSION.test(manifest.shellVersion || '') || !VERSION.test(manifest.minShellVersion || '')
+    || typeof manifest.sha512 !== 'string' || !/^[A-Za-z0-9+/]{86}==$/.test(manifest.sha512)) {
+    throw new Error('更新清单格式无效，请检查 fork Release 中的 ota.json')
+  }
+}
+
 export async function fetchManifest(): Promise<OtaManifest | null> {
-  const res = await net.fetch(OTA_MANIFEST_URL, { cache: 'no-store' })
+  const res = await net.fetch(OTA_MANIFEST_URL, { cache: 'no-store', signal: AbortSignal.timeout(15_000) })
+  if (res.status === 404) return null // Fork may not have published OTA assets yet.
   if (!res.ok) throw new Error(`获取更新信息失败 HTTP ${res.status}`)
   const manifest = (await res.json()) as OtaManifest
-  if (!manifest?.rendererVersion || !manifest?.file || !manifest?.sha512) return null
+  validateManifest(manifest)
   return manifest
 }
 
 async function downloadBuffer(url: string, onProgress: (pct: number) => void): Promise<Buffer> {
-  const res = await net.fetch(url)
+  const res = await net.fetch(url, { signal: AbortSignal.timeout(120_000) })
   if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`)
   const total = Number(res.headers.get('content-length') || 0)
   const reader = res.body?.getReader()
@@ -128,6 +153,7 @@ async function downloadBuffer(url: string, onProgress: (pct: number) => void): P
 
 // 下载 + 校验 + 原子暂存为 pending（不立即套用，等下次启动或手动重载）
 export async function stageRendererUpdate(manifest: OtaManifest): Promise<void> {
+  validateManifest(manifest)
   if (!otaRoot || staging) return
   staging = true
   try {
@@ -214,7 +240,7 @@ export function initOtaUpdater(opts: { bundledRendererRoot: string; reload: () =
   reloadWindow = opts.reload
   // 安全探测可写 OTA 目录：app.getPath / fs 在当前运行时（尤其鸿蒙 shim）可能不可用
   try {
-    const dir = path.join(app.getPath('userData'), 'ota')
+    const dir = path.join(app.getPath('userData'), 'ota', PROJECT_REPOSITORY.replace('/', '-'))
     fs.mkdirSync(dir, { recursive: true })
     otaRoot = dir
   } catch (err) {

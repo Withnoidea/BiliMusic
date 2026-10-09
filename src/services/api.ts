@@ -1,3 +1,4 @@
+import type { Track } from '@/types'
 import { parseDuration } from '@/utils/duration'
 import * as rendererApi from '@/services/bilibiliApi'
 /**
@@ -11,15 +12,6 @@ import type { TrackSource } from '@/services/bilibiliApi'
 
 function isElectron(): boolean {
   return !!window.electronAPI?.biliApi
-}
-
-// Desktop credentials stay in the main-process gateway.
-async function electronFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const query = new URLSearchParams()
-  Object.entries(params || {}).forEach(([key, value]) => query.set(key, String(value)))
-  const data = await window.electronAPI.biliApi.request(path + (query.size ? '?' + query : ''))
-  if (data.code !== 0) throw { code: data.code, message: data.message, path }
-  return data.data as T
 }
 
 // ===== 搜索 =====
@@ -71,6 +63,9 @@ export interface VideoInfo {
   aid: number
   title: string
   desc: string
+  tags?: string
+  musicCategory?: boolean
+  album?: string
   pic: string
   ownerName: string
   ownerMid: number
@@ -206,6 +201,8 @@ export async function getMusicRanking(options: { source?: DiscoverSource; page?:
       aid: v.aid,
       title: v.title,
       desc: v.description || v.desc || '',
+      tags: v.tag || '',
+      musicCategory: true,
       pic: normalizePic(v.pic),
       ownerName: v.author || v.owner?.name || '',
       ownerMid: v.mid || v.owner?.mid || 0,
@@ -222,7 +219,7 @@ export async function getMusicRanking(options: { source?: DiscoverSource; page?:
   // 共用 API 适配器：桌面环境的鉴权由主进程网关代持。
   const { getMusicRanking: rendererRanking } = rendererApi
   const data = await rendererRanking(options)
-  return (Array.isArray(data) ? data : (data as any).list || (data as any).data || []).map(parseItem)
+  return cleanMusicVideos((Array.isArray(data) ? data : (data as any).list || (data as any).data || []).map(parseItem))
 }
 
 // ===== 音乐中心（music.bilibili.com/pc/music-center 同源数据） =====
@@ -357,32 +354,31 @@ export async function getUserVideos(mid: number, page = 1, pageSize = 30): Promi
 
 // ===== 个性化推荐 =====
 
-export async function getRecommendVideos(ps = 20): Promise<VideoInfo[]> {
-  const parseItem = (v: any): VideoInfo => ({
-    bvid: v.bvid,
-    aid: v.id || v.aid,
-    title: v.title,
-    desc: v.desc || '',
-    pic: normalizePic(v.pic),
-    ownerName: v.owner?.name || v.author || '',
-    ownerMid: v.owner?.mid || v.mid || 0,
-    duration: v.duration || 0,
-    cid: v.cid || 0,
-    stat: {
-      view: v.stat?.view || v.play || 0,
-      like: v.stat?.like || 0,
-      favorite: v.stat?.favorite || v.favorites || 0,
-    },
-  })
-
-  if (isElectron()) {
-    const data = await electronFetch<{ item: any[] }>('/x/web-interface/index/top/rcmd', { ps })
-    return (data.item || []).map(parseItem)
+function feedVideo(v: rendererApi.PopularVideo): VideoInfo {
+  return {
+    bvid: v.bvid, aid: v.aid || v.id || 0, title: stripMarkup(v.title), desc: v.desc || '',
+    tags: v.tag || '', musicCategory: MUSIC_REGIONS.has(v.tid || 0) || /音乐|原创歌曲|翻唱|演奏/.test(v.tname || ''),
+    pic: normalizePic(v.pic), ownerName: v.owner?.name || '', ownerMid: v.owner?.mid || 0,
+    duration: parseDuration(v.duration), cid: v.cid || 0,
+    stat: { view: v.stat?.view || 0, like: v.stat?.like || 0, favorite: v.stat?.favorite || 0 },
   }
+}
 
-  const { getRecommendedVideos: rendererRec } = rendererApi
-  const data = await rendererRec(ps)
-  return (data.item || []).map(parseItem)
+export async function getRecommendVideos(ps = 20, seed = 0): Promise<VideoInfo[]> {
+  const data = await rendererApi.getRecommendedVideos(ps, seed)
+  const candidates = (data.item || []).filter(v => v.bvid).map(feedVideo)
+  // Homepage cards often omit category and description. Hydrate a bounded sample
+  // before accepting them, rather than treating the general feed as music.
+  const sample = candidates.filter(v => v.duration >= 60 && v.duration <= 600).slice(0, 12)
+  let cursor = 0
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (cursor < sample.length) {
+      const video = sample[cursor++]
+      try { Object.assign(video, feedVideo(await rendererApi.getVideoDetail(video.bvid))) }
+      catch { video.musicCategory = false }
+    }
+  }))
+  return cleanMusicVideos(sample)
 }
 
 // ===== 热门/推荐 =====
@@ -417,6 +413,8 @@ export interface QrCodeData {
 }
 
 export interface QrPollResult {
+  confirmed?: boolean
+  retryable?: boolean
   code: number
   status: number
   message: string
@@ -456,4 +454,126 @@ export async function logout(): Promise<void> {
 
   // 浏览器环境无法清除 bilibili.com 的 Cookie（跨域）
   throw new Error('Logout requires Electron environment')
+}
+
+// ===== Shared clean music feed: no relaxed fallback to unrelated popular videos =====
+const MUSIC_REGIONS = new Set([3, 28, 29, 30, 31, 59, 130, 193, 243, 244, 265, 266, 267])
+const MUSIC_BLACKLIST = /教程|开箱|评测|解说|伴奏分享|教学|求谱|乐理|聊天|访谈|直播回放|直播录像|全程回放|reaction|乐评|盘点|音乐分析|歌曲解析/i
+const MUSIC_WHITELIST = /\b(?:MV|Cover|Official|Live)\b|翻唱|单曲|原创|现场|原唱|演唱|演奏|纯音乐|歌曲|新歌|音乐剧|主题曲|插曲|片尾曲|片头曲|电音|摇滚|民谣|国风|古风|\b(?:OST|OP|ED)\b/i
+const MUSIC_SIGNAL = /\b(?:MV|Cover|OST)\b|翻唱|单曲|歌曲|演唱|演奏|纯音乐|主题曲|插曲|片尾曲|片头曲|原创音乐|电音|摇滚|民谣/i
+const MUSIC_TAGS = ['ACG 动漫歌曲', '华语流行 单曲', '摇滚 现场', '电音 Official', '古风 原创', '日语 翻唱', '粤语 经典歌曲', '民谣 Live', '纯音乐 演奏', '华语 MV']
+const tagPages = new Map<string, number>()
+let dynamicOffset = ''
+const stripMarkup = (value: string) => (value || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+
+export function musicScore(video: VideoInfo): number {
+  const title = stripMarkup(video.title)
+  const text = `${title} ${stripMarkup(video.desc)} ${video.tags || ''}`
+  if (!video.bvid || !Number.isFinite(video.duration) || video.duration < 60 || video.duration > 600 || MUSIC_BLACKLIST.test(text)) return -1
+  // Music-region provenance or an explicit song tag is mandatory.
+  if (!video.musicCategory && !MUSIC_SIGNAL.test(`${title} ${video.tags || ''}`)) return -1
+  return (MUSIC_WHITELIST.test(title) ? 8 : 0) + (MUSIC_WHITELIST.test(video.tags || '') ? 4 : 0)
+    + Math.min(3, Math.log10(1 + Math.max(0, video.stat.view)))
+}
+
+export function cleanMusicVideos(videos: VideoInfo[], exclude: ReadonlySet<string> = new Set()): VideoInfo[] {
+  const unique = new Map<string, VideoInfo>()
+  for (const video of videos) {
+    if (!exclude.has(video.bvid) && !unique.has(video.bvid) && musicScore(video) >= 0) unique.set(video.bvid, { ...video, title: stripMarkup(video.title) })
+  }
+  return [...unique.values()].sort((a, b) => musicScore(b) - musicScore(a))
+}
+
+export interface MusicFeedOptions {
+  mode: 'recommend' | 'discover'
+  seed: number
+  seenTrackIds: ReadonlySet<string>
+  recentTracks?: Track[]
+  limit?: number
+}
+
+async function searchMusicTag(keyword: string, seed: number): Promise<VideoInfo[]> {
+  const page = tagPages.get(keyword) ?? (1 + seed % 5)
+  tagPages.set(keyword, page + 1)
+  const orders = ['totalrank', 'pubdate', 'click'] as const
+  const data = await rendererApi.searchVideo(keyword, page, 50, { order: orders[seed % orders.length] })
+  // Exhausted keyword pages wrap only after the server says so; the seen set
+  // still prevents previously displayed IDs from being admitted again.
+  if (data.numPages && page >= data.numPages) tagPages.set(keyword, 1)
+  return (data.result || []).map(v => ({
+    bvid: v.bvid, aid: v.aid, title: v.title, desc: v.description || '', tags: v.tag, musicCategory: true,
+    pic: normalizePic(v.pic), ownerName: v.author, ownerMid: 0, duration: parseDuration(v.duration), cid: 0,
+    stat: { view: v.play || 0, like: 0, favorite: 0 },
+  }))
+}
+
+async function musicDynamics(): Promise<VideoInfo[]> {
+  const data = await rendererApi.getMusicDynamics(dynamicOffset)
+  dynamicOffset = data.offset || ''
+  return (data.items || []).flatMap(item => {
+    const archive = item.modules?.module_dynamic?.major?.archive
+    const author = item.modules?.module_author
+    return archive ? [{
+      bvid: archive.bvid, aid: archive.aid || 0, title: archive.title, desc: archive.desc || '',
+      pic: normalizePic(archive.cover), ownerName: author?.name || '', ownerMid: author?.mid || 0,
+      duration: parseDuration(archive.duration_text), cid: 0, stat: { view: 0, like: 0, favorite: 0 },
+    }] : []
+  })
+}
+
+async function freshMusic(): Promise<VideoInfo[]> {
+  const sources = await Promise.allSettled([getNewSongs(), getMusicCenterRank(12)])
+  return sources.flatMap(source => source.status === 'fulfilled' ? source.value.map(song => ({
+    bvid: song.bvid, aid: Number(song.aid) || 0, cid: Number(song.cid) || 0, title: song.title, desc: '',
+    musicCategory: true, album: song.album, pic: song.coverUrl, ownerName: song.artist, ownerMid: 0,
+    duration: parseDuration(song.duration), stat: { view: 0, like: 0, favorite: 0 },
+  })) : [])
+}
+
+/** Interleave ranked sources so a large search pool cannot bury personalization. */
+export function mixMusicPools(pools: VideoInfo[][], seen: ReadonlySet<string>, limit: number): VideoInfo[] {
+  const used = new Set(seen)
+  const ranked = pools.map(pool => cleanMusicVideos(pool, seen))
+  const result: VideoInfo[] = []
+  for (let index = 0; result.length < limit && ranked.some(pool => index < pool.length); index++) {
+    for (const pool of ranked) {
+      const video = pool[index]
+      if (!video || used.has(video.bvid)) continue
+      used.add(video.bvid)
+      result.push(video)
+      if (result.length === limit) break
+    }
+  }
+  return result
+}
+
+export async function getMusicFeed(options: MusicFeedOptions): Promise<VideoInfo[]> {
+  const seed = Math.abs(Math.floor(options.seed)) % 1000000
+  const limit = Math.max(1, Math.min(40, options.limit || 21))
+  const recent = (options.recentTracks || []).filter(track => track.bvid).slice(0, 10)
+  const anchor = recent[seed % Math.max(1, recent.length)]
+  const requests: Promise<VideoInfo[]>[] = [
+    searchMusicTag(MUSIC_TAGS[seed % MUSIC_TAGS.length], seed),
+    getMusicRanking({ source: 'latest', page: 1 + seed % 30, pageSize: 50 }),
+  ]
+  if (options.mode === 'recommend') {
+    requests.unshift(getRecommendVideos(30, seed))
+    requests.push(freshMusic(), musicDynamics())
+    if (anchor) requests.push(rendererApi.getRelatedVideos(anchor.bvid).then(videos => videos.map(feedVideo)))
+  }
+  const settled = await Promise.allSettled(requests)
+  const pools = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+  let result = mixMusicPools(pools, options.seenTrackIds, limit)
+  // Bounded replenishment from different genres and deeper pages, never replay
+  // old songs or relax the song filter just to fill the screen.
+  for (let round = 1; result.length < limit && round <= 3; round++) {
+    const extra = await Promise.allSettled([1, 2].map(offset => {
+      const cursor = seed + round * 2 + offset
+      return searchMusicTag(MUSIC_TAGS[cursor % MUSIC_TAGS.length], cursor)
+    }))
+    pools.push(...extra.flatMap(item => item.status === 'fulfilled' ? [item.value] : []))
+    result = mixMusicPools(pools, options.seenTrackIds, limit)
+  }
+  if (!result.length) throw new Error('暂未找到未展示过的合格歌曲，请再次换一换或稍后重试')
+  return result
 }

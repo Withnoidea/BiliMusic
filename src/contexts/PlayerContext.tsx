@@ -1,4 +1,4 @@
-import { shuffledFrom, reconcileShuffle } from '@/utils/playQueue'
+import { shuffledFrom, reconcileShuffle, trackEndAction } from '@/utils/playQueue'
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { Track, RepeatMode } from '@/types'
 import { extractAudio } from '@/services/api'
@@ -217,51 +217,35 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const handleTrackEnd = useCallback(() => {
     const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (!settings.autoPlay && repeatMode !== 'one') {
+    const index = displayQueue.findIndex(track => track.id === currentTrack?.id)
+    const action = trackEndAction(repeatMode, settings.autoPlay, displayQueue.length, index)
+    if (action === 'stop') {
+      shouldAutoplayRef.current = false
+      audioRef.current?.pause()
       setIsPlaying(false)
       return
     }
-    if (displayQueue.length === 0) {
-      setIsPlaying(false)
+    if (action === 'replay') {
+      const audio = audioRef.current
+      if (!audio || !currentTrack) return
+      audio.currentTime = 0
+      progressRef.current = 0
+      setProgress(0)
+      shouldAutoplayRef.current = true
+      audio.volume = 0
+      audio.play().then(() => {
+        if (shouldAutoplayRef.current) void fadeVolume(audio, targetVolumeRef.current)
+      }).catch(() => retryPlaybackRef.current?.())
       return
     }
-
-    switch (repeatMode) {
-      case 'one':
-        if (audioRef.current) {
-          audioRef.current.currentTime = 0
-          shouldAutoplayRef.current = true
-          audioRef.current.volume = 0
-          const audio = audioRef.current
-          audio.play().then(() => fadeVolume(audio, targetVolumeRef.current)).catch(() => retryPlaybackRef.current?.())
-        }
-        return
-      case 'all': {
-        const nextIdx = currentIndexRef.current + 1 >= displayQueue.length
-          ? 0 : currentIndexRef.current + 1
-        currentIndexRef.current = nextIdx
-        shouldAutoplayRef.current = true
-        setLoadVersion(v => v + 1)
-        setCurrentTrack(displayQueue[nextIdx])
-        setProgress(0)
-        setIsPlaying(true)
-        return
-      }
-      default: {
-        const nextIdx = currentIndexRef.current + 1
-        if (nextIdx >= displayQueue.length) {
-          setIsPlaying(false)
-          return
-        }
-        currentIndexRef.current = nextIdx
-        shouldAutoplayRef.current = true
-        setLoadVersion(v => v + 1)
-        setCurrentTrack(displayQueue[nextIdx])
-        setProgress(0)
-        setIsPlaying(true)
-      }
-    }
-  }, [isShuffled, queue, repeatMode, settings.autoPlay])
+    // Loop the existing shuffled order: each track is visited once per cycle.
+    currentIndexRef.current = action
+    shouldAutoplayRef.current = true
+    setLoadVersion(v => v + 1)
+    setCurrentTrack(displayQueue[action])
+    setProgress(0)
+    setIsPlaying(true)
+  }, [currentTrack, isShuffled, queue, repeatMode, settings.autoPlay])
 
   // One source lifecycle owns retries, listeners and cancellation, preventing late requests from stealing playback.
   useEffect(() => {

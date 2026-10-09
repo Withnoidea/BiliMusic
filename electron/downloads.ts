@@ -6,6 +6,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { assertTrustedSender, audioFile, downloadDirectory, validateAudioUrl } from './security'
 
+import { transcodeMp3, validateMetadata, type AudioMetadata } from './transcode'
+
+const activeFiles = new Set<string>()
 const tokens = new Map<string, { filename: string; directory: string; size: number }>()
 let active = 0
 const waiting: (() => void)[] = []
@@ -20,12 +23,16 @@ const receiptPath = (file: string) => path.join(app.getPath('userData'), 'audio-
 
 export function registerDownloadHandlers() {
   ipcMain.handle('bili:getDownloadDir', async (event, custom?: string) => { assertTrustedSender(event); return downloadDirectory(custom) })
-  ipcMain.handle('bili:downloadAudio', async (event, url: string, filename: string, custom?: string) => {
+  ipcMain.handle('bili:downloadAudio', async (event, url: string, filename: string, custom?: string, metadata?: AudioMetadata) => {
     assertTrustedSender(event)
+    const tags = validateMetadata(metadata)
     validateAudioUrl(url)
     const file = await audioFile(filename, custom)
+    if (activeFiles.has(file)) throw new Error('该音频正在下载')
+    activeFiles.add(file)
     await acquire()
     const temporary = file + '.' + randomUUID() + '.part'
+    const converted = temporary + '.mp3'
     const controller = new AbortController()
     let timeout = setTimeout(() => controller.abort(), 30000)
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined
@@ -44,7 +51,6 @@ export function registerDownloadHandlers() {
       const type = response.headers.get('content-type') || ''
       if (/text\/|json/.test(type)) throw new Error('音频源返回了无效内容')
       const total = Number(response.headers.get('content-length') || 0)
-      const hash = createHash('sha256')
       handle = await fs.open(temporary, 'wx')
       let received = 0, lastReport = 0
       const reader = response.body.getReader()
@@ -54,29 +60,40 @@ export function registerDownloadHandlers() {
         clearTimeout(timeout)
         timeout = setTimeout(() => controller.abort(), 30000)
         await handle.writeFile(value)
-        hash.update(value)
         received += value.length
         if (Date.now() - lastReport > 120) {
-          if (!event.sender.isDestroyed()) event.sender.send('bili:downloadProgress', { filename, received, total, percent: total ? Math.min(99, received / total * 100) : null })
+          if (!event.sender.isDestroyed()) event.sender.send('bili:downloadProgress', { filename, received, total, phase: 'downloading', percent: total ? Math.min(89, received / total * 90) : null })
           lastReport = Date.now()
         }
       }
       if (!received || (total && received !== total)) throw new Error('文件未完整下载，请重试')
       await handle.sync()
       await handle.close(); handle = undefined
+      clearTimeout(timeout)
+      let output = temporary
+      if (filename.endsWith('.mp3')) {
+        if (!event.sender.isDestroyed()) event.sender.send('bili:downloadProgress', { filename, received, total, percent: 90, phase: 'transcoding' })
+        await transcodeMp3(temporary, converted, tags)
+        output = converted
+      }
+      // Receipts and renderer records describe the exported file, not the CDN stream.
+      const size = (await fs.stat(output)).size
+      const sha256 = await digest(output)
       // Recheck the parent/target before commit (directory may have changed mid-transfer).
       if (await audioFile(filename, custom) !== file) throw new Error('下载目录已改变，请重试')
-      await fs.rename(temporary, file)
+      await fs.rename(output, file)
       const receipt = receiptPath(file)
       await fs.mkdir(path.dirname(receipt), { recursive: true })
-      await fs.writeFile(receipt, JSON.stringify({ size: received, sha256: hash.digest('hex') }))
-      if (!event.sender.isDestroyed()) event.sender.send('bili:downloadProgress', { filename, received, total: received, percent: 100 })
-      return { filePath: file, size: received }
+      await fs.writeFile(receipt, JSON.stringify({ size, sha256 }))
+      if (!event.sender.isDestroyed()) event.sender.send('bili:downloadProgress', { filename, received: size, total: size, percent: 100, phase: 'completed' })
+      return { filePath: file, size }
     } finally {
       clearTimeout(timeout)
       controller.abort()
       await handle?.close().catch(() => {})
       await fs.unlink(temporary).catch(() => {})
+      await fs.unlink(converted).catch(() => {})
+      activeFiles.delete(file)
       release()
     }
   })
@@ -113,7 +130,10 @@ export function registerDownloadHandlers() {
         const handle = await fs.open(file, 'r')
         const header = Buffer.alloc(12)
         try { await handle.read(header, 0, 12, 0) } finally { await handle.close() }
-        if (header.toString('ascii', 4, 8) !== 'ftyp') return null
+        const valid = filename.endsWith('.mp3')
+          ? header.toString('ascii', 0, 3) === 'ID3' || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)
+          : header.toString('ascii', 4, 8) === 'ftyp'
+        if (!valid) return null
       }
       const token = randomUUID()
       if (tokens.size >= 64) tokens.delete(tokens.keys().next().value!)
@@ -138,7 +158,7 @@ export function registerDownloadHandlers() {
         else { start = Number(match[1]); if (match[2]) end = Math.min(end, Number(match[2])) }
         if (start > end || start >= stat.size) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stat.size}` } })
       }
-      const headers: Record<string, string> = { 'Content-Type': 'audio/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1), 'Cache-Control': 'no-store' }
+      const headers: Record<string, string> = { 'Content-Type': entry.filename.endsWith('.mp3') ? 'audio/mpeg' : 'audio/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1), 'Cache-Control': 'no-store' }
       if (range) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`
       const body = request.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file, { start, end })) as ReadableStream<Uint8Array>
       return new Response(body, { status: range ? 206 : 200, headers })

@@ -97,7 +97,6 @@ let trayWindowReady = false
 let pendingTrayShow: { x: number; y: number } | null = null
 let isQuitting = false
 let lyricWindow: BrowserWindow | null = null
-let lyricLocked = true // 锁定 = 鼠标穿透，只能从设置里解锁拖动
 
 type TrayCommand = 'toggle-play' | 'next' | 'prev' | 'show-window' | 'quit'
 

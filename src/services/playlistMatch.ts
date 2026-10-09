@@ -115,7 +115,7 @@ function artistMatch(trackArtist: string, videoTitle: string, videoUploader: str
   if (!na) return 30
   if (nt.includes(na) || nu.includes(na)) return 100
   // 多人合唱场景，至少部分匹配
-  const artists = trackArtist.split(/[\/&,，]/).map(a => normalize(a)).filter(Boolean)
+  const artists = trackArtist.split(/[/&,，]/).map(a => normalize(a)).filter(Boolean)
   if (artists.length > 1) {
     const matched = artists.some(a => nt.includes(a) || nu.includes(a))
     if (matched) return 80
@@ -255,7 +255,7 @@ export async function matchTrack(
 ): Promise<MatchResult> {
   const cleanedName = cleanTitle(name) || name
   // 只用主歌手拼查询，避免整串 "A / B / C" 里的 "/" 伤 B站搜索命中；完整歌手串仍用于打分
-  const primaryArtist = artist.split(/[\/&,，]/)[0]?.trim() || artist
+  const primaryArtist = artist.split(/[/&,，]/)[0]?.trim() || artist
 
   // 第一段：曲名 + 主歌手
   let candidates = await searchAndScore(`${cleanedName} ${primaryArtist}`.trim(), name, artist, duration)

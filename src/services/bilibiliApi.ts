@@ -212,6 +212,7 @@ export async function searchVideo(
   keyword: string,
   page = 1,
   pageSize = 20,
+  music?: { order: 'totalrank' | 'pubdate' | 'click' },
 ): Promise<SearchResponse> {
   // 搜索接口需 WBI 签名，且必须发送与签名完全一致的 query（不能经 URL 再编码）
   const query = await encodeWbi({
@@ -219,6 +220,7 @@ export async function searchVideo(
     keyword,
     page,
     page_size: pageSize,
+    ...(music ? { tids: 3, order: music.order, duration: 1 } : {}),
   })
   const resp = await biliRequest(`${BILI_API}/x/web-interface/wbi/search/type?${query}`, {
     credentials: 'include',
@@ -482,6 +484,11 @@ export function getBestAudioUrl(playData: PlayUrlData): string {
 // ===== 热门/推荐 =====
 
 export interface PopularVideo {
+  desc?: string
+  tid?: number
+  tname?: string
+  tag?: string
+  id?: number
   bvid: string
   aid: number
   title: string
@@ -496,8 +503,25 @@ export async function getPopularVideos(ps = 10, pn = 1): Promise<{ list: Popular
   return biliFetch('/x/web-interface/popular', { params: { ps, pn } })
 }
 
-export async function getRecommendedVideos(ps = 10): Promise<{ item: PopularVideo[] }> {
-  return biliFetch('/x/web-interface/index/top/rcmd', { params: { ps } })
+export async function getRecommendedVideos(ps = 10, seed = 0): Promise<{ item: PopularVideo[] }> {
+  // The main-process gateway attaches the logged-in Bilibili session.
+  return biliFetch('/x/web-interface/index/top/rcmd', { params: { ps, fresh_type: 3, fresh_idx: seed, fresh_idx_1h: seed, feed_version: 'V8' } })
+}
+
+export async function getRelatedVideos(bvid: string): Promise<PopularVideo[]> {
+  return biliFetch('/x/web-interface/archive/related', { params: { bvid } })
+}
+
+interface DynamicArchive {
+  bvid: string
+  aid?: number
+  title: string
+  desc?: string
+  cover: string
+  duration_text: string
+}
+export async function getMusicDynamics(offset = ''): Promise<{ items: { modules?: { module_author?: { name: string; mid: number }; module_dynamic?: { major?: { archive?: DynamicArchive } } } }[]; offset?: string }> {
+  return biliFetch('/x/polymer/web-dynamic/v1/feed/all', { params: { type: 'video', offset } })
 }
 
 // ===== 音乐排行榜 =====
@@ -525,7 +549,7 @@ export async function getMusicRanking(options: { source?: 'hot' | 'original' | '
     params: { rid: options.source === 'original' ? 28 : 3, day: 3, original: options.source === 'original' ? 1 : 0 },
   })
   const list = Array.isArray(data) ? data : data.list || []
-  const start = list.length ? ((page - 1) * size) % list.length : 0
+  const start = list.length ? (page - 1) * size : 0
   return list.slice(start, start + size)
 }
 
@@ -695,6 +719,8 @@ export interface QrCodeData {
 }
 
 export interface QrPollResult {
+  confirmed?: boolean
+  retryable?: boolean
   code: number
   status: number
   message: string

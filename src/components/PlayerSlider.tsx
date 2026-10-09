@@ -72,6 +72,7 @@ export default function PlayerSlider({
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       aria-label={ariaLabel}
+      title={variant === 'volume' ? `音量：${Math.round(clampedValue)}%` : ariaLabel}
       aria-valuemin={min}
       aria-valuemax={safeMax}
       aria-valuenow={Math.round(clampedValue)}

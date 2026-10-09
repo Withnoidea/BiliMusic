@@ -10,6 +10,7 @@ import path from 'path'
 const electronExternals = [
   'electron',
   'electron-updater',
+  'ffmpeg-static',
   ...builtinModules,
   ...builtinModules.map((m) => `node:${m}`),
 ]

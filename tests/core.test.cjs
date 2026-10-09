@@ -51,7 +51,7 @@ test('streaming download, range playback, integrity checks and bounded concurren
     return new Response(body, { headers: { 'content-length': String(url.includes('/truncated') ? body.length + 2 : body.length), 'content-type': 'audio/mp4' } })
   } } }
   const security = load('electron/security.ts', { electron })
-  load('electron/downloads.ts', { electron, './security': security }).registerDownloadHandlers()
+  load('electron/downloads.ts', { electron, './security': security, './transcode': load('electron/transcode.ts', { electron }) }).registerDownloadHandlers()
   const event = { ...trusted, sender: { isDestroyed: () => false, send: (_name, data) => progress.push(data) } }
   const invoke = (name, ...args) => handlers.get('bili:' + name)(event, ...args)
   const result = await invoke('downloadAudio', 'https://test.bilivideo.com/a', 'track.m4a')
@@ -172,7 +172,10 @@ test('QR headers persist full cookie values to both stores, survive init, flush,
   assert.equal(primary.values.size, 0)
   assert.equal(isolated.values.size, 0)
   headers = ['SESSDATA=partial; Path=/']
-  await assert.rejects(invoke('qrPoll', 'partial'), /不完整/)
+  const incomplete = await invoke('qrPoll', 'partial')
+  assert.equal(incomplete.confirmed, true)
+  assert.equal(incomplete.retryable, true)
+  assert.equal(incomplete.status, -2)
 })
 
 test('duration conversion and video-detail fallback avoid fabricated durations', async () => {

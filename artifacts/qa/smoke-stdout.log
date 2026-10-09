@@ -1,7 +1,11 @@
 
-[BiliMusic-OTA] init done. otaRoot= E:\document\project\BiliMusic\artifacts\qa\profile-MDzHOF\bilimusic\ota | activeRenderer= bundled
+[BiliMusic-OTA] init done. otaRoot= E:\document\project\BiliMusic\artifacts\qa\profile-qLLu3v\bilimusic\ota\Withnoidea-BiliMusic | activeRenderer= bundled
 [BiliMusic-OTA] activeRendererRoot= E:\document\project\BiliMusic\dist
 [renderer] [preload] Electron preload script starting...
 [renderer] [preload] Electron preload script starting...
+[BiliMusic-OTA] check: manifest= none | appV= 36.9.5
+[BiliMusic-OTA] check: manifest= none | appV= 36.9.5
+[BiliMusic-OTA] check: manifest= none | appV= 36.9.5
+[BiliMusic-OTA] check: manifest= none | appV= 36.9.5
 [renderer] [preload] Electron preload script starting...
-SMOKE PASS {"playRequests":7,"viewport":{"width":721,"body":721,"main":637}}
+SMOKE PASS {"playRequests":4,"viewport":{"width":721,"body":721,"main":637}}

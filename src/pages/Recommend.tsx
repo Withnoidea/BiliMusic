@@ -1,9 +1,10 @@
-import { parseDuration } from '@/utils/duration'
 import TrackSkeleton from '@/components/TrackSkeleton'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Flame, Play, RefreshCw, Sparkles } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
-import { getMusicCenterRank, getNewSongs, type MusicSong } from '@/services/api'
+import { getMusicFeed, type VideoInfo } from '@/services/api'
+import { markMusicFeedSeen, nextFeedSeed, seenTrackIds } from '@/services/recommendationSession'
+import { loadRecentTracks } from '@/utils/storage'
 import type { Track } from '@/types'
 import {
   ActionButton,
@@ -17,78 +18,80 @@ import {
   TrackListRow,
 } from '@/components/AppleMusicPage'
 
-function songToTrack(s: MusicSong): Track {
+function songToTrack(s: VideoInfo): Track {
   return {
     id: s.bvid,
     title: s.title,
-    artist: s.artist,
-    coverUrl: s.coverUrl,
-    duration: parseDuration(s.duration),
+    artist: s.ownerName,
+    album: s.album,
+    coverUrl: s.pic,
+    duration: s.duration,
     videoUrl: `https://www.bilibili.com/video/${s.bvid}`,
     bvid: s.bvid,
     aid: s.aid,
     cid: s.cid,
-    playCount: 0,
+    playCount: s.stat.view,
     isLiked: false,
   }
 }
 
 export default function Recommend() {
-  const [rankSongs, setRankSongs] = useState<MusicSong[]>([])
-  const [newSongs, setNewSongs] = useState<MusicSong[]>([])
+  const [recommendedSongs, setRecommendedSongs] = useState<VideoInfo[]>([])
+  const [featuredSongs, setFeaturedSongs] = useState<VideoInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const player = usePlayer()
 
+  const [batch, setBatch] = useState(0)
+  const requestId = useRef(0)
   useEffect(() => {
-    loadAll()
-  }, [])
-
-  async function loadAll() {
+    const request = ++requestId.current
     setLoading(true)
     setError(null)
-    let ok = false
-    try {
-      const rank = await getMusicCenterRank(30)
-      setRankSongs(rank)
-      ok = ok || rank.length > 0
-    } catch {
-      // 单区块失败不影响另一个。
-    }
-    try {
-      const fresh = await getNewSongs()
-      setNewSongs(fresh)
-      ok = ok || fresh.length > 0
-    } catch {
-      // ignore
-    }
-    if (!ok) setError('加载失败')
-    setLoading(false)
-  }
+    void getMusicFeed({ mode: 'recommend', seed: nextFeedSeed(), seenTrackIds, recentTracks: loadRecentTracks(), limit: 21 })
+      .then(data => {
+        if (request !== requestId.current) return
+        // Only the committed, visible batch counts as seen (not stale requests).
+        markMusicFeedSeen(data)
+        setFeaturedSongs(data.slice(0, 3))
+        setRecommendedSongs(data.slice(3))
+      })
+      .catch((reason: unknown) => {
+        if (request === requestId.current) setError(reason instanceof Error ? reason.message : '推荐加载失败，请重试')
+      })
+      .finally(() => { if (request === requestId.current) setLoading(false) })
+    return () => { ++requestId.current }
+  }, [batch])
 
-  const handlePlay = useCallback((song: MusicSong, list: MusicSong[]) => {
+  const handlePlay = useCallback((song: VideoInfo, list: VideoInfo[]) => {
     player.playFromList(songToTrack(song), list.map(songToTrack))
   }, [player])
 
-  const handlePlayAll = useCallback((songs: MusicSong[]) => {
+  const handlePlayAll = useCallback((songs: VideoInfo[]) => {
     if (songs.length === 0) return
     player.playAll(songs.map(songToTrack))
   }, [player])
 
-  const heroSong = rankSongs[0] || newSongs[0]
-  const featured = newSongs.slice(0, 3)
-  const rankList = rankSongs.slice(0, 18)
+  const heroSong = featuredSongs[0] || recommendedSongs[0]
+  const featured = featuredSongs.slice(0, 3)
+  const recommendations = recommendedSongs.slice(0, 18)
 
   return (
     <MusicPageShell>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span className="text-caption">猜你喜欢 · 音乐动态 · 最近收听的相关歌曲</span>
+        <ActionButton tone="subtle" disabled={loading} onClick={() => setBatch(value => value + 1)}>
+          <RefreshCw size={16} /> {loading ? '加载中' : '换一换 / 刷新'}
+        </ActionButton>
+      </div>
       <MusicHero
         eyebrow="For You"
         title="推荐"
-        subtitle="来自 B站音乐中心的热歌与新歌，用更接近 Apple Music 的方式呈现。"
-        image={heroSong?.coverUrl}
+        subtitle="融合 B站个性化推荐、新歌动态与收听偏好。登录后可获取更多专属推荐。"
+        image={heroSong?.pic}
         tone="red"
         action={(
-          <ActionButton onClick={() => handlePlayAll(rankSongs.length ? rankSongs : newSongs)} disabled={loading || (!rankSongs.length && !newSongs.length)}>
+          <ActionButton onClick={() => handlePlayAll([...featuredSongs, ...recommendedSongs])} disabled={loading || (!recommendedSongs.length && !featuredSongs.length)}>
             <Play size={17} fill="currentColor" />
             播放推荐
           </ActionButton>
@@ -101,7 +104,7 @@ export default function Recommend() {
         <EmptyLibrary icon={<RefreshCw size={38} />} title="加载失败" subtitle={error} />
       ) : (
         <>
-          <MusicSection title="新歌速递" icon={<Sparkles size={22} />}>
+          <MusicSection title="为你精选" icon={<Sparkles size={22} />}>
             <FeaturedGrid>
               {featured.map((song, index) => {
                 const track = songToTrack(song)
@@ -111,16 +114,16 @@ export default function Recommend() {
                     track={{ ...track, playCount: 0 }}
                     index={index + 1}
                     isCurrent={player.currentTrack?.id === song.bvid}
-                    onPlay={() => handlePlay(song, newSongs)}
+                    onPlay={() => handlePlay(song, featuredSongs)}
                   />
                 )
               })}
             </FeaturedGrid>
           </MusicSection>
 
-          <MusicSection title="热歌榜" icon={<Flame size={22} />}>
+          <MusicSection title="猜你喜欢" icon={<Flame size={22} />}>
             <TrackList>
-              {rankList.map((song, index) => {
+              {recommendations.map((song, index) => {
                 const track = songToTrack(song)
                 return (
                   <TrackListRow
@@ -129,7 +132,7 @@ export default function Recommend() {
                     index={index + 1}
                     isCurrent={player.currentTrack?.id === song.bvid}
                     isPlaying={player.isPlaying}
-                    onPlay={() => handlePlay(song, rankSongs)}
+                    onPlay={() => handlePlay(song, recommendedSongs)}
                   />
                 )
               })}

@@ -39,3 +39,8 @@ platform/HarmonyOS/oh_modules
 # Isolated Electron QA profiles (generated; never publish browser/session data)
 /artifacts/qa/profile-*/
 /artifacts/qa-packaged/profile-*/
+
+/artifacts/qr-network/profile-*/
+
+/artifacts/qa-upgrade/profile-*/
+/artifacts/qa-upgrade-packaged/profile-*/

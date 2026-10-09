@@ -1,0 +1,4 @@
+Error occurred in handler for 'shell:open-path': Error: 下载目录未授权，请在设置中重新选择目录
+    at Fe (file:///E:/document/project/BiliMusic/release/music-upgrade/win-unpacked/resources/app.asar/dist-electron/main.js:55:89)
+    at async file:///E:/document/project/BiliMusic/release/music-upgrade/win-unpacked/resources/app.asar/dist-electron/main.js:1761:64
+    at async Session.<anonymous> (node:electron/js2c/browser_init:2:106823)

@@ -1,5 +1,5 @@
 import { useCoverColor } from '@/hooks/useCoverColor'
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import {
   Play,
@@ -22,6 +22,9 @@ import { useNowPlaying } from '@/contexts/NowPlayingContext'
 import { useAddToPlaylist } from '@/contexts/AddToPlaylistContext'
 import PlayQueue from '@/components/PlayQueue'
 import PlayerSlider from '@/components/PlayerSlider'
+import { loadDesktopLyricsSettings, saveDesktopLyricsSettings } from '@/hooks/useDesktopLyrics'
+
+const repeatLabels = { none: '顺序播放（播完停止）', all: '列表循环', one: '单曲循环' } as const
 
 const spring = {
   type: 'spring',
@@ -42,6 +45,16 @@ export default function PlayerBar() {
   const { open } = useNowPlaying()
   const { openAddToPlaylist } = useAddToPlaylist()
   const [queueOpen, setQueueOpen] = useState(false)
+  const [desktopLyrics, setDesktopLyrics] = useState(loadDesktopLyricsSettings)
+  useEffect(() => {
+    const sync = () => setDesktopLyrics(loadDesktopLyricsSettings())
+    window.addEventListener('DESKTOP_LYRICS_CHANGED_EVENT', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('DESKTOP_LYRICS_CHANGED_EVENT', sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
   const trackDuration = duration || player.currentTrack?.duration || 0
   const ambient = useCoverColor(player.currentTrack?.coverUrl)
   const remaining = Math.max(trackDuration - progress, 0)
@@ -90,7 +103,7 @@ export default function PlayerBar() {
           className="player-bar__metadata"
           type="button"
           onClick={() => { if (player.currentTrack) open() }}
-          title={player.currentTrack ? '查看歌词' : undefined}
+          title={player.currentTrack ? '查看歌词' : '尚未播放歌曲'}
           whileHover={player.currentTrack ? { backgroundColor: 'var(--player-hover)' } : undefined}
           whileTap={player.currentTrack ? { scale: 0.985 } : undefined}
           transition={{ duration: 0.2 }}
@@ -236,14 +249,14 @@ export default function PlayerBar() {
         {player.currentTrack && (
           <>
             <IconButton
-              ariaLabel="添加至歌单"
+              ariaLabel="添加到歌单"
               onClick={() => openAddToPlaylist(player.currentTrack!)}
             >
               <ListPlus size={18} />
             </IconButton>
             <IconButton
               active={Boolean(player.currentTrack.isLiked)}
-              ariaLabel="喜欢"
+              ariaLabel={player.currentTrack.isLiked ? '取消喜欢' : '添加到我喜欢'}
               onClick={() => player.toggleLike(player.currentTrack!.id)}
             >
               <Heart
@@ -272,7 +285,7 @@ export default function PlayerBar() {
           <TransportButton
             active={player.isShuffled}
             onClick={() => player.setIsShuffled(!player.isShuffled)}
-            ariaLabel="随机播放"
+            ariaLabel={player.isShuffled ? '关闭随机播放' : '开启随机播放'}
           >
             <Shuffle size={18} />
           </TransportButton>
@@ -292,9 +305,11 @@ export default function PlayerBar() {
             onClick={() => {
               const modes = ['none', 'all', 'one'] as const
               const idx = modes.indexOf(player.repeatMode)
-              player.setRepeatMode(modes[(idx + 1) % 3])
+              const mode = modes[(idx + 1) % modes.length]
+              player.setRepeatMode(mode)
+              player.showToast(`已切换为：${repeatLabels[mode]}`)
             }}
-            ariaLabel="循环模式"
+            ariaLabel={repeatLabels[player.repeatMode]}
           >
             <span style={{ position: 'relative', display: 'flex' }}>
               <Repeat size={18} />
@@ -350,13 +365,20 @@ export default function PlayerBar() {
           flexShrink: 0,
         }}
       >
-        <IconButton ariaLabel="查看歌词" onClick={open}>
+        <IconButton
+          active={desktopLyrics.enabled}
+          ariaLabel={desktopLyrics.enabled ? '关闭桌面歌词' : '打开桌面歌词'}
+          onClick={() => {
+            if (!window.electronAPI?.desktopLyrics) { player.showToast('桌面歌词仅在桌面客户端可用'); return }
+            saveDesktopLyricsSettings({ ...loadDesktopLyricsSettings(), enabled: !desktopLyrics.enabled })
+          }}
+        >
           <Mic size={18} />
         </IconButton>
 
         <IconButton
           active={queueOpen}
-          ariaLabel="播放队列"
+          ariaLabel="打开播放队列"
           onClick={() => setQueueOpen(o => !o)}
         >
           <ListMusic size={18} />
@@ -402,7 +424,7 @@ export default function PlayerBar() {
             {player.isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </IconButton>
           <PlayerSlider
-            ariaLabel="音量"
+            ariaLabel={`音量：${player.isMuted ? 0 : player.volume}%`}
             value={player.isMuted ? 0 : player.volume}
             max={100}
             onChange={(value) => {
@@ -411,6 +433,7 @@ export default function PlayerBar() {
             }}
             width={98}
             step={5}
+            formatValue={(value) => `${Math.round(value)}%`}
             variant="volume"
           />
         </div>
@@ -427,6 +450,7 @@ function PlayButton({ isPlaying, loading, onClick }: { isPlaying: boolean; loadi
       type="button"
       onClick={onClick}
       aria-label={loading ? '正在加载音频' : isPlaying ? '暂停' : '播放'}
+      title={isPlaying ? '暂停' : '播放'}
       disabled={loading}
       whileHover={{ scale: loading ? 1 : 1.06, backgroundColor: 'var(--player-hover)' }}
       whileTap={{ scale: loading ? 1 : 0.94 }}
@@ -482,6 +506,7 @@ function TransportButton({
     <motion.button
       type="button"
       aria-label={ariaLabel}
+      title={ariaLabel}
       onClick={onClick}
         whileHover={{ y: -1, color: active ? '#ff375f' : 'var(--player-text)' }}
       whileTap={{ scale: 0.9 }}
@@ -519,6 +544,7 @@ function IconButton({
     <motion.button
       type="button"
       aria-label={ariaLabel}
+      title={ariaLabel}
       onClick={onClick}
       whileHover={{
         scale: 1.04,

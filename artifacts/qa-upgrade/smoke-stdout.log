@@ -1,0 +1,11 @@
+
+[BiliMusic-OTA] init done. otaRoot= E:\document\project\BiliMusic\artifacts\qa-upgrade\profile-uNUMOI\bilimusic\ota\Withnoidea-BiliMusic | activeRenderer= bundled
+[BiliMusic-OTA] activeRendererRoot= E:\document\project\BiliMusic\dist
+[renderer] [preload] Electron preload script starting...
+[renderer] [preload] Electron preload script starting...
+[BiliMusic-OTA] check: manifest= none | appV= 1.0.4
+[BiliMusic-OTA] check: manifest= none | appV= 1.0.4
+[BiliMusic-OTA] check: manifest= none | appV= 1.0.4
+[BiliMusic-OTA] check: manifest= none | appV= 1.0.4
+[renderer] [preload] Electron preload script starting...
+SMOKE PASS {"playRequests":16,"viewport":{"width":721,"body":721,"main":637}}

@@ -99,6 +99,7 @@ export function registerBiliApiHandlers() {
     const url = `${BILI_PASSPORT}/x/passport-login/web/qrcode/generate`
     const response = await authSession().fetch(url, {
       headers: { Referer: `${BILI_PASSPORT}/login` },
+      credentials: 'include',
       signal: AbortSignal.timeout(15000),
     })
     const data = await response.json()
@@ -113,40 +114,14 @@ export function registerBiliApiHandlers() {
     }
   })
 
-  // 轮询二维码状态
-  handle('bili:qrPoll', async (_event, qrcodeKey: string) => {
-    const url = `${BILI_PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`
-    const response = await authSession().fetch(url, {
-      headers: { Referer: `${BILI_PASSPORT}/login` },
-      signal: AbortSignal.timeout(15000),
-      redirect: 'manual',
-    })
-
-    const setCookieHeaders = response.headers.getSetCookie?.() || []
-    if (!setCookieHeaders.length) {
-      const header = response.headers.get('set-cookie')
-      if (header) setCookieHeaders.push(...header.split(/,(?=\s*[^;,=\s]+=)/))
-    }
-    let data: any
-    try { data = JSON.parse(await response.text()) } catch {
-      throw new Error('扫码状态响应无效，请重试')
-    }
-    if (data.code === 0 && data.data?.code === 0) await persistLoginCookies(setCookieHeaders, data.data.url)
-
-    // B站 poll 响应：外层 code 表示 API 调用结果，
-    // 内层 data.code 才是扫码状态（86101=未扫码, 86090=已扫码, 0=成功）
-    return {
-      code: data.code === 0 ? data.data?.code ?? -1 : data.code,
-      status: data.code === 0 ? data.data?.code ?? -1 : data.code,
-      message: data.data?.message || data.message,
-      url: '',
-    }
-  })
+  // A confirmed key is single-use. Retries must finalize the saved response, not poll it again.
+  handle('bili:qrPoll', (_event, qrcodeKey: string) => pollQrLogin(qrcodeKey))
 
   // 获取当前 Cookie 中的登录状态
   handle('bili:getLoginStatus', getLoginStatus)
 
   handle('bili:logout', async () => {
+    qrAttempts.clear()
     for (const store of cookieStores()) {
       for (const cookie of await store.get({ domain: 'bilibili.com' })) {
         if (AUTH_COOKIE_NAMES.includes(cookie.name)) {
@@ -163,6 +138,7 @@ export function registerBiliApiHandlers() {
 // ===== BiliBili API Fetch Helper =====
 
 const API_PATHS = new Set([
+  '/x/web-interface/archive/related', '/x/polymer/web-dynamic/v1/feed/all',
   '/x/web-interface/nav', '/x/web-interface/view', '/x/player/playurl',
   '/x/web-interface/search/type', '/x/web-interface/wbi/search/type', '/x/space/wbi/arc/search',
   '/x/web-interface/newlist', '/x/web-interface/popular', '/x/web-interface/index/top/rcmd', '/x/web-interface/ranking/region',
@@ -174,6 +150,83 @@ const AUTH_COOKIE_NAMES = ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ck
 const cookieStores = () => [session.defaultSession.cookies, authSession().cookies]
 const persistentExpiry = () => Date.now() / 1000 + 180 * 86400
 let cachedLogin: { isLogin: boolean; isLoggedIn: boolean; uid: string; uname: string; face: string } | null = null
+
+interface QrResult {
+  code: number
+  status: number
+  message: string
+  url: string
+  confirmed?: boolean
+  retryable?: boolean
+}
+interface QrAttempt {
+  createdAt: number
+  confirmed?: { headers: string[]; url?: string }
+  inFlight?: Promise<QrResult>
+  result?: QrResult
+}
+const qrAttempts = new Map<string, QrAttempt>()
+
+// Electron 36 net-fetch joins response header arrays with ", ". getSetCookie()
+// consequently can return ONE entry containing several cookies. Split EVERY entry,
+// but never the comma in an Expires date (there is no cookie-name= after that comma).
+export function splitSetCookieHeaders(headers: string[]): string[] {
+  return headers.flatMap(header => header.split(/,(?=\s*[^;,=\s]+=)/).map(value => value.trim()))
+}
+function responseCookies(response: Response) {
+  const values = response.headers.getSetCookie?.() || []
+  return splitSetCookieHeaders(values.length ? values : [response.headers.get('set-cookie') || ''])
+}
+async function pollQrLogin(key: string): Promise<QrResult> {
+  if (typeof key !== 'string' || !key || key.length > 512) throw new Error('无效的二维码')
+  for (const [id, attempt] of qrAttempts) {
+    if (!attempt.inFlight && Date.now() - attempt.createdAt > 10 * 60_000) qrAttempts.delete(id)
+  }
+  let attempt = qrAttempts.get(key)
+  if (!attempt) {
+    if (qrAttempts.size >= 32) throw new Error('二维码请求过多，请稍后重试')
+    attempt = { createdAt: Date.now() }
+    qrAttempts.set(key, attempt)
+  }
+  if (attempt.result) return attempt.result
+  if (attempt.inFlight) return attempt.inFlight
+  const task = processQrAttempt(key, attempt)
+  attempt.inFlight = task
+  try { return await task } finally { attempt.inFlight = undefined }
+}
+async function processQrAttempt(key: string, attempt: QrAttempt): Promise<QrResult> {
+  if (!attempt.confirmed) {
+    const response = await authSession().fetch(`${BILI_PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(key)}`, {
+      headers: { Referer: `${BILI_PASSPORT}/login` }, credentials: 'include',
+      signal: AbortSignal.timeout(15000), redirect: 'error',
+    })
+    if (!response.ok) throw new Error(`扫码状态请求失败 (${response.status})`)
+    let data: any
+    try { data = await response.json() } catch { throw new Error('扫码状态响应无效，请重试') }
+    const code = data.code === 0 ? data.data?.code ?? -1 : data.code
+    if (code !== 0) return { code, status: code, message: data.data?.message || data.message || '', url: '' }
+    // Remember success BEFORE any cookie write, flush or nav request can fail.
+    attempt.confirmed = { headers: responseCookies(response), url: data.data?.url }
+  }
+  let stage: 'cookies' | 'verification' = 'cookies'
+  try {
+    await persistLoginCookies(attempt.confirmed.headers, attempt.confirmed.url)
+    stage = 'verification'
+    const user = await getLoginStatus()
+    if (!user.isLogin) throw new Error('登录状态未生效')
+    const result = { code: 0, status: 0, message: '登录成功', url: '', confirmed: true }
+    attempt.result = result
+    // Credentials remain exclusively in the cookie stores after completion.
+    attempt.confirmed = undefined
+    return result
+  } catch {
+    // Never expose Chromium error text (it can contain cookie values) across IPC.
+    return { code: -2, status: -2, confirmed: true, retryable: true, url: '',
+      message: stage === 'cookies'
+        ? '手机已确认，但登录凭据保存未完成。请重试完成登录，无需再次扫码。'
+        : '手机已确认，登录凭据已保存，但暂时无法验证账号。请检查网络后重试完成登录。' }
+  }
+}
 
 async function writeCookie(cookie: Electron.CookiesSetDetails) {
   // Both stores must succeed before reporting QR success; values never cross IPC.
@@ -198,23 +251,36 @@ export async function initializeBiliAuth() {
 }
 async function persistLoginCookies(headers: string[], loginUrl?: string) {
   const parsed = new Map<string, Electron.CookiesSetDetails>()
-  for (const header of headers) {
+  for (const header of splitSetCookieHeaders(headers)) {
     const cookie = parseSetCookie(header)
-    if (cookie?.name) parsed.set(cookie.name, cookie)
+    if (cookie?.name && AUTH_COOKIE_NAMES.includes(cookie.name)) parsed.set(cookie.name, cookie)
   }
   if (loginUrl) {
-    const url = new URL(loginUrl)
-    if (url.protocol === 'https:' && (url.hostname === 'bilibili.com' || url.hostname.endsWith('.bilibili.com'))) {
-      for (const name of AUTH_COOKIE_NAMES) {
-        const value = url.searchParams.get(name)
-        if (value && !parsed.has(name)) parsed.set(name, { url: BILI_API, domain: '.bilibili.com', path: '/', name, value,
-          secure: true, httpOnly: true, expirationDate: persistentExpiry() })
+    // Older passport responses contain an http callback. Never navigate to it;
+    // only read allowlisted credential fields locally, preserving percent encoding.
+    try {
+      const url = new URL(loginUrl)
+      if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+        && (url.hostname === 'bilibili.com' || url.hostname.endsWith('.bilibili.com'))) {
+        for (const pair of url.search.slice(1).split('&')) {
+          const equals = pair.indexOf('=')
+          const name = pair.slice(0, equals)
+          const value = pair.slice(equals + 1)
+          if (equals > 0 && AUTH_COOKIE_NAMES.includes(name) && value && !parsed.has(name)) {
+            parsed.set(name, { url: BILI_API, domain: '.bilibili.com', path: '/', name, value,
+              secure: true, httpOnly: true, expirationDate: persistentExpiry() })
+          }
+        }
       }
-    }
+    } catch { /* An optional malformed callback must not discard valid Set-Cookie. */ }
   }
   // Chromium may have consumed Set-Cookie before JS can read the header.
-  for (const cookie of await authSession().cookies.get({ url: BILI_API })) {
-    if (!parsed.has(cookie.name)) parsed.set(cookie.name, { ...cookie, url: BILI_API,
+  const existing = await authSession().cookies.get({ url: BILI_API })
+  const incomingUid = parsed.get('DedeUserID')?.value
+  const existingUid = existing.find(cookie => cookie.name === 'DedeUserID')?.value
+  for (const cookie of existing) {
+    if (incomingUid && existingUid && incomingUid !== existingUid) continue
+    if (AUTH_COOKIE_NAMES.includes(cookie.name) && !parsed.has(cookie.name)) parsed.set(cookie.name, { ...cookie, url: BILI_API,
       expirationDate: cookie.expirationDate || persistentExpiry() })
   }
   for (const name of ['SESSDATA', 'bili_jct', 'DedeUserID']) {
@@ -248,6 +314,7 @@ async function getLoginStatus() {
 async function fetchBiliResponse(urlPath: string): Promise<any> {
   const response = await authSession().fetch(`${BILI_API}${urlPath}`, {
     headers: { Referer: BILI_REFERER, Origin: BILI_REFERER },
+    credentials: 'include',
     signal: AbortSignal.timeout(20000), redirect: 'error',
   })
   if (!response.ok) throw new Error(`B站请求失败 (${response.status})`)

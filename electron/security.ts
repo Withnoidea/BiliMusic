@@ -40,7 +40,7 @@ export async function downloadDirectory(custom?: string): Promise<string> {
   return actual
 }
 export function validateAudioFilename(filename: unknown): asserts filename is string {
-  if (typeof filename !== 'string' || filename.length > 180 || !filename.endsWith('.m4a')
+  if (typeof filename !== 'string' || filename.length > 180 || !/\.(?:m4a|mp3)$/.test(filename)
     || /[<>:"/\\|?*\x00-\x1f]/.test(filename) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(filename)) throw new Error('无效的音频文件名')
 }
 export async function audioFile(filename: string, custom?: string): Promise<string> {

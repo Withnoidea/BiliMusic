@@ -39,7 +39,6 @@ export function useLyrics(track: Track | null, enabled: boolean) {
     if (!enabled || !track) return
     load(track)
     // 仅在曲目切换或启用时重取
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, track?.id])
 
   const search = useCallback((q: string): Promise<LyricCandidate[]> => searchLyricCandidates(q), [])

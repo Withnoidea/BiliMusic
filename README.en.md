@@ -11,7 +11,7 @@
     ·
     <a href="#-harmonyos-pc">HarmonyOS PC</a>
     ·
-    <a href="https://github.com/HanversionOvO/BiliMusic">GitHub</a>
+    <a href="https://github.com/Withnoidea/BiliMusic">GitHub</a>
   </p>
   <p>
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=111" />
@@ -514,3 +514,17 @@ Please respect platform terms, copyright rules, and local laws. Do not use this 
 
 Designed and built by MikannQAQ.
 
+
+## Fork repository and updates
+
+This fork is maintained at [Withnoidea/BiliMusic](https://github.com/Withnoidea/BiliMusic).
+Use its [Releases](https://github.com/Withnoidea/BiliMusic/releases) and
+[Issues](https://github.com/Withnoidea/BiliMusic/issues), not upstream releases.
+Original project credit: [HanversionOvO/BiliMusic](https://github.com/HanversionOvO/BiliMusic).
+
+The app checks only this fork. A fork with no public stable Release shows an explicit
+“no release available” message, not “up to date”. Without `ota.json`, the app checks
+the fork's latest GitHub Release and offers its release page for manual download.
+See [release instructions](docs/RELEASING.md) for installer, updater and OTA assets.
+The app ID and existing playlist/login storage remain unchanged. Old upstream OTA
+bundles are isolated and cannot replace the bundled fork interface.

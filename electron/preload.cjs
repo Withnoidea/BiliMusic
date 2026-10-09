@@ -37,8 +37,8 @@ const biliApi = {
   extractAudio: (bvid) =>
     ipcRenderer.invoke('bili:extractAudio', bvid),
 
-  downloadAudio: (audioUrl, filename, customDir) =>
-    ipcRenderer.invoke('bili:downloadAudio', audioUrl, filename, customDir),
+  downloadAudio: (audioUrl, filename, customDir, metadata) =>
+    ipcRenderer.invoke('bili:downloadAudio', audioUrl, filename, customDir, metadata),
   getDownloadDir: (customDir) => ipcRenderer.invoke('bili:getDownloadDir', customDir),
   deleteDownloadedFile: (filename, customDir) => ipcRenderer.invoke('bili:deleteDownloadedFile', filename, customDir),
   checkDownloadedFiles: (filenames, customDir) => ipcRenderer.invoke('bili:checkDownloadedFiles', filenames, customDir),

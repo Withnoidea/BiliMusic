@@ -1,3 +1,4 @@
+import { PROJECT_REPOSITORY, PROJECT_URL, RELEASES_URL } from '@/config/project'
 import { openDownloadsFolder, getDownloadsFolderPath, friendlyDownloadError } from '@/services/downloadManager'
 import { usePlayer } from '@/contexts/PlayerContext'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -50,8 +51,19 @@ export default function Settings() {
   const [updateAction, setUpdateAction] = useState<'restart' | 'reload' | null>(null)
   const [dl, setDl] = useState<DesktopLyricsSettings>(() => loadDesktopLyricsSettings())
 
+  useEffect(() => {
+    const sync = () => setDl(loadDesktopLyricsSettings())
+    window.addEventListener('DESKTOP_LYRICS_CHANGED_EVENT', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('DESKTOP_LYRICS_CHANGED_EVENT', sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
+
   const updateDl = (patch: { enabled?: boolean; locked?: boolean; style?: Partial<DesktopLyricsStyle> }) => {
-    const next: DesktopLyricsSettings = { ...dl, ...patch, style: { ...dl.style, ...(patch.style || {}) } }
+    const current = loadDesktopLyricsSettings()
+    const next: DesktopLyricsSettings = { ...current, ...patch, style: { ...current.style, ...(patch.style || {}) } }
     setDl(next)
     saveDesktopLyricsSettings(next)
   }
@@ -64,6 +76,8 @@ export default function Settings() {
       switch (event.type) {
         case 'checking':
           setUpdateStatus('正在检查更新…'); setUpdateAction(null); break
+        case 'unavailable':
+          setUpdateStatus(event.message); setUpdateAction(null); break
         case 'up-to-date':
           setUpdateStatus(`已是最新版本（v${event.version}）`); setUpdateAction(null); break
         case 'available':
@@ -86,10 +100,15 @@ export default function Settings() {
     })
   }, [])
 
-  const checkUpdate = () => {
+  const checkUpdate = async () => {
     setUpdateStatus('正在检查更新…')
     setUpdateAction(null)
-    window.electronAPI?.checkForUpdate?.()
+    try {
+      if (!window.electronAPI?.checkForUpdate) throw new Error('请在桌面客户端中检查更新')
+      await window.electronAPI.checkForUpdate()
+    } catch (error) {
+      setUpdateStatus(`检查更新失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   const runUpdateAction = () => {
     if (updateAction === 'restart') window.electronAPI?.quitAndInstall?.()
@@ -369,6 +388,9 @@ export default function Settings() {
           </SettingsGroup>
 
           <SettingsGroup title="关于" icon={<Info size={20} />}>
+            <SettingsRow label="更新来源" description="仅检查此 fork 的正式 Releases；未发布版本时会明确提示，不会从原仓库下载更新。">
+              <span>{PROJECT_REPOSITORY}</span>
+            </SettingsRow>
             <SettingsRow label="版本">
               <span className="settings-version">BiliMusic v{appVersion}</span>
             </SettingsRow>
@@ -383,11 +405,15 @@ export default function Settings() {
                   {updateAction === 'restart' ? '重启并安装' : '立即重载'}
                 </button>
               )}
-              <button type="button" onClick={() => window.electronAPI?.openExternal?.('https://github.com/HanversionOvO/BiliMusic')}>
+              <button type="button" onClick={() => window.electronAPI?.openExternal?.(PROJECT_URL)}>
                 <Github size={14} />
                 关于项目
               </button>
-              {updateStatus && <span>{updateStatus}</span>}
+              <button type="button" onClick={() => window.electronAPI?.openExternal?.(RELEASES_URL)}>
+                <Download size={14} />
+                版本发布页
+              </button>
+              {updateStatus && <span role="status">{updateStatus}</span>}
             </div>
           </SettingsGroup>
         </div>
@@ -410,13 +436,14 @@ export default function Settings() {
                 </button>
               </div>
             </SettingsRow>
-            <SettingsRow label="下载音质">
+            <SettingsRow label="下载格式">
               <StyledSelect
-                value={settings.downloadQuality}
-                onChange={(downloadQuality) => setAppSettings({ downloadQuality: downloadQuality as AppSettings['downloadQuality'] })}
-                options={['标准', '高品质', '无损']}
+                value={settings.downloadFormat === 'm4a' ? 'M4A (原源格式)' : 'MP3 (推荐，兼容性强)'}
+                onChange={(value) => setAppSettings({ downloadFormat: value.startsWith('M4A') ? 'm4a' : 'mp3' })}
+                options={['MP3 (推荐，兼容性强)', 'M4A (原源格式)']}
               />
             </SettingsRow>
+            <p className="text-caption">MP3 以 320kbps 导出并写入歌名、歌手、专辑及可用封面；有损转码不会提升原音质。M4A 保留原始音频流。</p>
           </SettingsGroup>
 
           <SettingsGroup title="歌单云同步" icon={<Cloud size={20} />}>

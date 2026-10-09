@@ -16,6 +16,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   playQuality: '高品质',
   downloadQuality: '高品质',
   downloadDir: '',
+  downloadFormat: 'mp3',
   autoPlay: true,
   showLyrics: true,
 }
@@ -206,7 +207,8 @@ export function loadAppSettings(): AppSettings {
   try {
     const raw = readStoredItem(SETTINGS_KEY)
     if (!raw) return DEFAULT_APP_SETTINGS
-    return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(raw) }
+    const saved = JSON.parse(raw)
+    return { ...DEFAULT_APP_SETTINGS, ...saved, downloadFormat: saved.downloadFormat === 'm4a' ? 'm4a' : 'mp3' }
   } catch {
     return DEFAULT_APP_SETTINGS
   }

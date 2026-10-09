@@ -1,6 +1,7 @@
 export interface Track {
   id: string
   title: string
+  album?: string
   artist: string
   coverUrl: string
   duration: number
@@ -38,6 +39,7 @@ export interface AppSettings {
   sidebarState: SidebarState
   playQuality: '标准' | '高品质' | '无损'
   downloadQuality: '标准' | '高品质' | '无损'
+  downloadFormat: 'mp3' | 'm4a'
   downloadDir: string
   autoPlay: boolean
   showLyrics: boolean

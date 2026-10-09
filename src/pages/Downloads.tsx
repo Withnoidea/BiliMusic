@@ -41,7 +41,7 @@ export default function Downloads() {
     </div>
     {active.length > 0 && <MusicSection title={`下载队列 · ${active.length}`} icon={<Download size={19} />}>
       <div className="download-jobs">{active.map(job => <div className="download-job" key={job.id}>
-        <div className="download-job__copy"><strong>{job.track.title}</strong><span>{job.state === 'failed' ? job.error : job.state === 'queued' ? '等待下载 · 最多同时下载 2 首' : job.state === 'resolving' ? '正在获取音频…' : job.percent === null ? '正在下载 · 大小未知' : `正在下载 ${Math.floor(job.percent)}%`}</span></div>
+        <div className="download-job__copy"><strong>{job.track.title}</strong><span>{job.state === 'failed' ? job.error : job.state === 'queued' ? '等待下载 · 最多同时下载 2 首' : job.state === 'transcoding' ? '正在转码 MP3 · 写入封面与标签…' : job.state === 'resolving' ? '正在获取音频…' : job.percent === null ? '正在下载 · 大小未知' : `正在下载 ${Math.floor(job.percent)}%`}</span></div>
         {job.state === 'failed' ? <ActionButton tone="subtle" onClick={() => void downloadSingleTrack(job.track).catch(report)}><RefreshCw size={15} />重试</ActionButton> : <progress aria-label={`${job.track.title} 下载进度`} max={100} value={job.percent ?? undefined} />}
       </div>)}</div>
     </MusicSection>}
